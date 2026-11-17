@@ -208,6 +208,24 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .price-note{display:block;font-size:10px;color:#9A6200;margin-top:2px;font-weight:700}
 .pd-chk{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin-top:14px}
 .pd-chk input{width:22px;height:22px;accent-color:var(--main)}
+.visit{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-top:1.5px dashed var(--line)}
+.visit:first-of-type{border-top:0;padding-top:2px}
+.v-no{width:30px;height:30px;border-radius:50%;background:var(--main);color:#fff;display:grid;place-items:center;font-family:"Mochiy Pop One",sans-serif;font-size:14px;flex:none;margin-top:4px}
+.v-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+.v-city{align-self:flex-start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v-city:not(.on){background:var(--sun-soft);color:#9A6200;box-shadow:inset 0 0 0 1.5px var(--sun)}
+.v-memo{height:42px;font-size:16px;border-radius:14px;padding:0 12px}
+.v-side{flex:none;display:flex;flex-direction:column;align-items:center;gap:3px}
+.v-lbl{font-size:11px;color:var(--muted);font-weight:700}
+.mini-step{display:flex;align-items:center;gap:4px}
+.mini-step button{width:34px;height:34px;border-radius:50%;border:0;background:var(--main-soft);color:var(--main-dark);font-size:19px;font-weight:800;line-height:1}
+.mini-step button.plus{background:var(--main);color:#fff;box-shadow:0 3px 0 var(--main-dark)}
+.mini-step span{min-width:20px;text-align:center;font-family:"Mochiy Pop One",sans-serif;font-size:19px}
+.v-del{border:0;background:none;color:var(--muted);font-size:11px;text-decoration:underline;padding:4px}
+.price-row{display:flex;flex-wrap:wrap;gap:10px 16px;font-size:12px;color:var(--sub);font-weight:700}
+.price-row>span{display:flex;align-items:center;gap:6px}
+.price-row .price-chip{margin-top:0}
+.sec-t .r b{font-family:"Mochiy Pop One",sans-serif;font-weight:400;font-size:15px;margin:0 2px}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 70px);transform:translateX(-50%);background:rgba(26,26,26,.92);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;font-weight:700;z-index:90;animation:fade .2s;max-width:90vw;text-align:center}
 @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -350,7 +368,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -512,7 +530,7 @@ function normalizeState(raw) {
   st.settings = Object.assign(clone(DEFAULT_SETTINGS), st.settings || {});
   if (['Mayuシステム', 'DEKIRU LIFE'].includes(st.settings.appName)) st.settings.appName = 'にこほーむ';  // 旧アプリ名から移行
   if (!Array.isArray(st.settings.regions) || !st.settings.regions.length) st.settings.regions = clone(DEFAULT_REGIONS);
-  st.daily = (st.daily || []).map(d => Object.assign({ areas: [], sites: 0, contracts: 0, highway: 0, sitePrice: st.settings.sitePrice, contractPrice: st.settings.contractPrice, planId: null, memo: '', ext: {} }, d));
+  st.daily = (st.daily || []).map(d => Object.assign({ areas: [], sites: 0, contracts: 0, highway: 0, sitePrice: st.settings.sitePrice, contractPrice: st.settings.contractPrice, planId: null, memo: '', visits: null, ext: {} }, d));
   st.plans = (st.plans || []).map(p => Object.assign({ areas: [], sites: 0, contracts: 0, highway: 0, memo: '', status: 'planned', convertedTo: null, ext: {} }, p));
   st.expenses = (st.expenses || []).map(e => Object.assign({ payee: '', desc: '', receiptId: null, payMethod: '', ext: {} }, e));
   return st;
@@ -537,12 +555,34 @@ const ui = {
   setPref: 0,
   calMonth: null,
 };
+/* 現場明細：件数と地区から現場リストを作る（旧データ・予定からの変換用） */
+function visitsFrom(areas, sites, contracts) {
+  const vs = [];
+  for (let i = 0; i < sites; i++) { const a = areas && areas.length ? areas[i % areas.length] : { pref: '', city: '' }; vs.push({ id: uid(), pref: a.pref, city: a.city, memo: '', contracts: 0 }); }
+  for (let c = contracts, i = 0; c > 0 && vs.length; c--, i = (i + 1) % vs.length) vs[i].contracts++;
+  return vs;
+}
+/* 現場リストから件数・成約件数・訪問地区を自動集計 */
+function syncVisits(f) {
+  f.sites = f.visits.length;
+  f.contracts = f.visits.reduce((a, v) => a + (v.contracts || 0), 0);
+  const seen = new Set(); f.areas = [];
+  f.visits.forEach(v => { const k = v.pref + '|' + v.city; if (v.city && !seen.has(k)) { seen.add(k); f.areas.push({ pref: v.pref, city: v.city }); } });
+  return f;
+}
 function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
-  if (ex) return { date, id: ex.id, areas: clone(ex.areas), sites: ex.sites, contracts: ex.contracts, highway: ex.highway, sitePrice: ex.sitePrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false };
+  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? clone(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts), highway: ex.highway, sitePrice: ex.sitePrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
-  return { date, id: null, areas: p ? clone(p.areas) : [], sites: p ? p.sites : 0, contracts: p ? p.contracts : 0, highway: p ? (p.highway || 0) : 0,
-    sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false };
+  return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, p.contracts) : [], highway: p ? (p.highway || 0) : 0,
+    sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
+}
+function lastVisitPlace(beforeDate) {
+  const f = ui.daily; if (f && f.visits.length) { const v = f.visits[f.visits.length - 1]; if (v.city) return { pref: v.pref, city: v.city }; }
+  const prev = [...S.daily].filter(d => d.date < beforeDate && d.areas.length).sort((a, b) => a.date < b.date ? 1 : -1)[0];
+  if (!prev) return { pref: '', city: '' };
+  const vs = prev.visits && prev.visits.length ? prev.visits : prev.areas; const l = vs[vs.length - 1];
+  return { pref: l.pref, city: l.city };
 }
 function blankPlan(date) {
   const ex = S.plans.find(p => p.date === date);
@@ -691,27 +731,31 @@ function areaBlock(kind, areas) {
       ${kind === 'daily' ? '<button class="btn ghost sm" data-act="sameArea">前回と同じ</button>' : ''}
     </div></div>`;
 }
-function openPicker(kind) {
-  const target = kind === 'daily' ? ui.daily : ui.plan;
-  const first = target.areas[0] ? S.settings.regions.findIndex(r => r.pref === target.areas[0].pref) : 0;
-  ui.picker = { kind, pi: Math.max(0, first) };
+function openPicker(kind, i) {
+  let pref;
+  if (kind === 'visit') { const v = ui.daily.visits[i]; pref = v.pref || lastVisitPlace(ui.daily.date).pref; }
+  else { const target = kind === 'daily' ? ui.daily : ui.plan; pref = target.areas[0] && target.areas[0].pref; }
+  const first = pref ? S.settings.regions.findIndex(r => r.pref === pref) : 0;
+  ui.picker = { kind, i, pi: Math.max(0, first) };
   renderPicker();
 }
 function renderPicker() {
   const pk = ui.picker; if (!pk) { $('#overlay').innerHTML = ''; return; }
-  const target = pk.kind === 'daily' ? ui.daily : ui.plan;
+  const isVisit = pk.kind === 'visit';
+  const target = isVisit ? null : (pk.kind === 'daily' ? ui.daily : ui.plan);
+  const v = isVisit ? ui.daily.visits[pk.i] : null;
   const regs = S.settings.regions; const reg = regs[pk.pi] || regs[0];
-  const sel = new Set(target.areas.map(a => a.pref + '|' + a.city));
+  const sel = isVisit ? new Set(v && v.city ? [v.pref + '|' + v.city] : []) : new Set(target.areas.map(a => a.pref + '|' + a.city));
   $('#overlay').innerHTML = `<div class="backdrop" data-act="closePicker" data-self="1"><div class="sheet">
-    <div class="sheet-h"><h3>地域を選ぶ</h3><button class="btn sm" data-act="closePicker">完了</button></div>
+    <div class="sheet-h"><h3>${isVisit ? `現場${pk.i + 1}の地区を選ぶ` : '地域を選ぶ'}</h3><button class="btn sm" data-act="closePicker">${isVisit ? '閉じる' : '完了'}</button></div>
     <div class="sheet-b">
       <div class="chips" style="margin-bottom:12px">${regs.map((r, i) => `<button class="chip ${i === pk.pi ? 'on' : ''}" data-act="pickPref" data-i="${i}">${esc(r.pref)}</button>`).join('')}</div>
-      <div class="flabel">${esc(reg.pref)}の市区町村（タップで選択／解除）</div>
+      <div class="flabel">${esc(reg.pref)}の市区町村（${isVisit ? 'タップで決定' : 'タップで選択／解除'}）</div>
       <div class="chips">${reg.cities.map(c => `<button class="chip ${sel.has(reg.pref + '|' + c) ? 'on' : ''}" data-act="pickCity" data-city="${esc(c)}">${esc(c)}</button>`).join('')}</div>
       <div class="flabel mt12">リストにない市区町村を追加</div>
       <div class="row"><input class="inp" id="pk-new" placeholder="例：○○町"><button class="btn sm" style="flex:none" data-act="pickAddCity">追加</button></div>
     </div>
-    <div class="sheet-f"><div class="small-note" style="margin:0">選択中：${target.areas.length ? esc(areaText(target.areas)) : 'なし'}</div></div>
+    ${isVisit ? '' : `<div class="sheet-f"><div class="small-note" style="margin:0">選択中：${target.areas.length ? esc(areaText(target.areas)) : 'なし'}</div></div>`}
   </div></div>`;
 }
 
@@ -740,12 +784,9 @@ function viewDaily() {
     ${f.fromPlan ? `<div class="notice">この日の予定を読み込みました。実際の件数に直して保存すると実績に切り替わります（予定は二重計上されません）。</div>` : ''}
     ${ex && plan ? `<div class="notice ok">この日の予定は実績に切り替え済みです。</div>` : ''}
   </div>`;
-  h += areaBlock('daily', f.areas);
-  h += `<div class="card">
-    ${counter('sites', '現場件数', f.sites, priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice))}
-    ${counter('contracts', '成約件数', f.contracts, priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice))}
-  </div>
-  <div class="card"><div class="field"><label>高速代（経費1）</label>
+  h += visitsCard(f);
+  h += `
+<div class="card"><div class="field"><label>高速代（経費1）</label>
     <div class="yen-in"><input inputmode="numeric" pattern="[0-9]*" placeholder="0" value="${f.highway || ''}" data-in="dHighway" id="d-highway"><span>円</span></div>
     <div class="quick">${lastHighways().map(v => `<button data-act="setHighway" data-v="${v}">${yen(v)}円</button>`).join('')}<button data-act="setHighway" data-v="0">0円</button></div>
   </div></div>
@@ -761,6 +802,28 @@ function viewDaily() {
   h += `<div class="savebar"><span id="sb-face">${face(moodOf(calcDaily(f).profit), 'face sb-face')}</span><div class="sb-info"><div class="sb-l">当日利益（売上−高速代）</div><div id="sb-profit">${Y(calcDaily(f).profit, profitCls(calcDaily(f).profit))}</div></div>
     <button class="btn" data-act="saveDaily">${ex ? '更新' : '保存'}</button></div>`;
   return h;
+}
+function visitsCard(f) {
+  const prefShort = p => esc((p || '').replace(/[県都府]$/, ''));
+  return `<div class="card" id="visits"><div class="sec-t">今日の現場 <span class="r"><b class="c-sales">${f.sites}</b>件・成約<b class="c-sales">${f.contracts}</b>件</span></div>
+    ${f.visits.length ? f.visits.map((v, i) => `<div class="visit">
+      <div class="v-no">${i + 1}</div>
+      <div class="v-main">
+        <button class="chip v-city ${v.city ? 'on' : ''}" data-act="pickVisit" data-i="${i}">${v.city ? `<small>${prefShort(v.pref)}</small>${esc(v.city)}` : '地区を選ぶ'} ▾</button>
+        <input class="inp v-memo" placeholder="邸名・メモ（任意）" value="${esc(v.memo)}" data-in="vMemo" data-i="${i}">
+      </div>
+      <div class="v-side"><div class="v-lbl">成約</div>
+        <div class="mini-step"><button data-act="vCon" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCon" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>
+        <button class="v-del" data-act="vDel" data-i="${i}">削除</button></div>
+    </div>`).join('') : '<div class="empty">「＋ 現場を追加」で、回った現場を1件ずつ登録します</div>'}
+    <button class="btn mt12" data-act="vAdd">＋ 現場を追加</button>
+    <div class="price-row mt12"><span>現場単価 ${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice)}</span><span>成約単価 ${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice)}</span></div>
+  </div>`;
+}
+function setVisitPlace(pref, city) {
+  const v = ui.daily.visits[ui.picker.i]; if (v) { v.pref = pref; v.city = city; }
+  ui.picker = null; $('#overlay').innerHTML = '';
+  syncVisits(ui.daily); ui.daily.dirty = true; render();
 }
 function dailySummaryHtml() {
   const c = calcDaily(ui.daily);
@@ -1095,7 +1158,10 @@ function kvItems(a) {
   return [['現場件数', a.sites + '件'], ['成約件数', a.contracts + '件'], ['現場売上', yen(a.site) + '円'], ['成約売上', yen(a.contract) + '円'], ['売上合計', yen(a.sales) + '円', 1],
     ['高速代', yen(a.highway) + '円'], ...EXP_CATS.map(c => [c.label, yen(a.exp[c.key]) + '円']), ['経費合計', yen(a.expTotal) + '円', 1], ['収支（売上合計−経費合計）', yen(a.profit) + '円', 1]];
 }
-function salesContent(d) { const ar = areaText(d.areas); return `住宅定期点検${ar ? '（' + ar + '）' : ''}`; }
+function salesContent(d) {
+  if (d.visits && d.visits.length) return '住宅定期点検：' + d.visits.map(v => (v.city || '地区未設定') + (v.memo ? `（${v.memo}）` : '')).join('・');
+  const ar = areaText(d.areas); return `住宅定期点検${ar ? '（' + ar + '）' : ''}`;
+}
 function expenseRows(f, t) {
   const rows = [];
   S.daily.filter(d => d.date >= f && d.date <= t && d.highway > 0).forEach(d => rows.push({ date: d.date, key: 'highway', cat: '高速代', payee: '', desc: `高速道路利用料${d.areas.length ? '（' + areaText(d.areas) + '）' : ''}`, amount: d.highway, order: 0 }));
@@ -1355,7 +1421,8 @@ async function saveDaily() {
   if (dup) { await uiAlert(`${fmtFull(f.date)}はすでに登録されています。登録済みデータを編集してください。`); ui.daily = blankDaily(f.date); return render(); }
   const now = new Date().toISOString();
   let rec = f.id ? S.daily.find(d => d.id === f.id) : null;
-  const data = { date: f.date, areas: clone(f.areas), sites: f.sites, contracts: f.contracts, highway: f.highway, sitePrice: f.sitePrice, contractPrice: f.contractPrice };
+  syncVisits(f);
+  const data = { date: f.date, visits: clone(f.visits), areas: clone(f.areas), sites: f.sites, contracts: f.contracts, highway: f.highway, sitePrice: f.sitePrice, contractPrice: f.contractPrice };
   if (rec) Object.assign(rec, data, { updatedAt: now });
   else { rec = Object.assign({ id: uid(), createdAt: now, updatedAt: now, planId: null, memo: '', ext: {} }, data); S.daily.push(rec); }
   linkPlanFor(rec);
@@ -1549,9 +1616,24 @@ const A = {
     ui.daily.areas = clone(prev.areas); ui.daily.dirty = true; render(); toast(`${fmtMD(prev.date)}の地区をコピーしました`);
   },
   openPicker: el => openPicker(el.dataset.kind),
+  pickVisit: el => openPicker('visit', +el.dataset.i),
+  vAdd: () => {
+    const f = ui.daily; const pl = lastVisitPlace(f.date);
+    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, memo: '', contracts: 0 });
+    syncVisits(f); f.dirty = true; render(); refreshDailySummary();
+    const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (!pl.city) openPicker('visit', f.visits.length - 1);
+  },
+  vCon: el => { const v = ui.daily.visits[+el.dataset.i]; v.contracts = Math.max(0, Math.min(99, v.contracts + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
+  vDel: async el => {
+    const i = +el.dataset.i, v = ui.daily.visits[i];
+    if ((v.memo || v.contracts) && !(await uiConfirm(`現場${i + 1}（${v.city || '地区未設定'}）を削除しますか？`, { ok: '削除する', danger: true }))) return;
+    ui.daily.visits.splice(i, 1); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
+  },
   closePicker: (el, e) => { if (el.dataset.self && e.target !== el) return; ui.picker = null; $('#overlay').innerHTML = ''; render(); },
   pickPref: el => { ui.picker.pi = +el.dataset.i; renderPicker(); },
   pickCity: el => {
+    if (ui.picker.kind === 'visit') { setVisitPlace(S.settings.regions[ui.picker.pi].pref, el.dataset.city); return; }
     const t = ui.picker.kind === 'daily' ? ui.daily : ui.plan; const pref = S.settings.regions[ui.picker.pi].pref; const city = el.dataset.city;
     const i = t.areas.findIndex(a => a.pref === pref && a.city === city);
     if (i >= 0) t.areas.splice(i, 1); else t.areas.push({ pref, city });
@@ -1560,6 +1642,7 @@ const A = {
   pickAddCity: async () => {
     const v = $('#pk-new').value.trim(); if (!v) return;
     const reg = S.settings.regions[ui.picker.pi]; if (!reg.cities.includes(v)) reg.cities.push(v);
+    if (ui.picker.kind === 'visit') { await persist(); setVisitPlace(reg.pref, v); toast(`${v}を追加しました`); return; }
     const t = ui.picker.kind === 'daily' ? ui.daily : ui.plan; if (!t.areas.some(a => a.pref === reg.pref && a.city === v)) t.areas.push({ pref: reg.pref, city: v });
     t.dirty = true; await persist(); renderPicker(); toast(`${v}を追加しました`);
   },
@@ -1626,6 +1709,7 @@ const I = { // input（入力中・即時反映）
   },
   dHighway: el => { ui.daily.highway = toInt(el.value); ui.daily.dirty = true; refreshDailySummary(); },
   pHighway: el => { ui.plan.highway = toInt(el.value); markPlanDirty(); $('#p-sum').innerHTML = planSummaryHtml(); },
+  vMemo: el => { const v = ui.daily.visits[+el.dataset.i]; if (v) { v.memo = el.value; ui.daily.dirty = true; } },
   pMemo: el => { ui.plan.memo = el.value; markPlanDirty(); },
   eAmount: el => { ui.exp.amount = toInt(el.value); },
   eDesc: el => { ui.exp.desc = el.value; },
