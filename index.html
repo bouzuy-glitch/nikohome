@@ -256,7 +256,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .dx-in input{font-size:22px}
 .dx-quick{margin:6px 0 4px 82px}
 .sec-t .r b.c-exp{font-family:"Mochiy Pop One",sans-serif;font-weight:400;font-size:15px}
-.visit{display:flex;flex-direction:column;gap:8px}
+.visit{display:flex;flex-direction:column;gap:8px;align-items:stretch}
 .v-head{display:flex;align-items:center;gap:8px}
 .v-head .v-no{margin-top:0}
 .v-head .v-del{margin-left:auto}
@@ -268,6 +268,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .v-cx{padding:0}
 .dx-in{min-width:0}
 .dx-in input{width:100%}
+.v-counts{align-self:stretch;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:#FBF7F3;border-radius:16px;padding:8px 6px}
+.v-cnt{display:flex;flex-direction:column;align-items:center;gap:4px}
+.v-cnt .v-lbl{font-size:12px;font-weight:700;color:var(--sub)}
+.v-cnt.cx .v-lbl{color:var(--exp)}
+.v-cnt.cx .mini-step button.plus{background:var(--exp);box-shadow:0 3px 0 #B83945}
+.v-cnt.cx .mini-step button{background:var(--exp-soft);color:var(--exp)}
+.v-cnt.cx .mini-step button.plus{color:#fff;background:var(--exp)}
+.v-cnt .mini-step{gap:3px}
+.v-cnt .mini-step button{width:32px;height:32px}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 70px);transform:translateX(-50%);background:rgba(26,26,26,.92);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;font-weight:700;z-index:90;animation:fade .2s;max-width:90vw;text-align:center}
 @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -410,7 +419,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.12.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -613,17 +622,34 @@ const ui = {
   calMonth: null,
 };
 /* 現場明細：件数と地区から現場リストを作る（旧データ・予定からの変換用） */
-function visitsFrom(areas, sites, contracts) {
-  const vs = [];
-  for (let i = 0; i < sites; i++) { const a = areas && areas.length ? areas[i % areas.length] : { pref: '', city: '' }; vs.push({ id: uid(), pref: a.pref, city: a.city, memo: '', contracts: 0 }); }
-  for (let c = contracts, i = 0; c > 0 && vs.length; c--, i = (i + 1) % vs.length) vs[i].contracts++;
-  return vs;
+/* 現場住所ごとの件数行 {pref, city, sites, cancels, contracts}。同じ住所の行は1行にまとめる */
+function mergeRows(rows) {
+  const out = [];
+  rows.forEach(r => {
+    const hit = r.city && out.find(o => o.pref === r.pref && o.city === r.city);
+    if (hit) { hit.sites += r.sites; hit.cancels += r.cancels; hit.contracts += r.contracts; }
+    else out.push(Object.assign({ id: uid() }, r));
+  });
+  return out;
 }
-/* 現場リストから件数・成約件数・訪問地区を自動集計 */
+/* 旧形式（1現場1行・cancelフラグ）からの変換 */
+function normVisits(vs) {
+  return mergeRows((vs || []).map(v => v.sites === undefined
+    ? { pref: v.pref || '', city: v.city || '', sites: v.cancel ? 0 : 1, cancels: v.cancel ? 1 : 0, contracts: v.contracts || 0 }
+    : { pref: v.pref || '', city: v.city || '', sites: v.sites || 0, cancels: v.cancels || 0, contracts: v.contracts || 0 }));
+}
+/* 件数と地区から行を作る（旧データ・予定からの変換用） */
+function visitsFrom(areas, sites, contracts, cancels = 0) {
+  const ar = areas && areas.length ? areas : [{ pref: '', city: '' }];
+  const rows = ar.map(a => ({ pref: a.pref, city: a.city, sites: 0, cancels: 0, contracts: 0 }));
+  for (let i = 0; i < sites; i++) rows[i % rows.length].sites++;
+  if (rows.length) { rows[0].contracts = contracts || 0; rows[0].cancels = cancels || 0; }
+  return mergeRows(rows.filter(r => r.sites || r.cancels || r.contracts));
+}
+/* 行から件数・成約件数・訪問地区を自動集計 */
 function syncVisits(f) {
-  f.visits.forEach(v => { if (v.cancel) v.contracts = 0; });
-  f.sites = f.visits.filter(v => !v.cancel).length;
-  f.cancels = f.visits.filter(v => v.cancel).length;
+  f.sites = f.visits.reduce((a, v) => a + (v.sites || 0), 0);
+  f.cancels = f.visits.reduce((a, v) => a + (v.cancels || 0), 0);
   f.contracts = f.visits.reduce((a, v) => a + (v.contracts || 0), 0);
   const seen = new Set(); f.areas = [];
   f.visits.forEach(v => { const k = v.pref + '|' + v.city; if (v.city && !seen.has(k)) { seen.add(k); f.areas.push({ pref: v.pref, city: v.city }); } });
@@ -631,7 +657,7 @@ function syncVisits(f) {
 }
 function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
-  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? clone(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
+  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? normVisits(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts, ex.cancels || 0), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
   return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, 0) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
     cancelPrice: S.settings.cancelPrice, sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
@@ -866,18 +892,18 @@ function viewDaily() {
 function visitsCard(f) {
   const prefShort = p => esc((p || '').replace(/[県都府]$/, ''));
   return `<div class="card" id="visits"><div class="sec-t">今日の現場 <span class="r">現場<b class="c-sales">${f.sites}</b>・キャンセル<b class="c-exp">${f.cancels}</b>・成約<b class="c-sales">${f.contracts}</b></span></div>
-    ${f.visits.length ? f.visits.map((v, i) => `<div class="visit ${v.cancel ? 'is-cancel' : ''}">
+    ${f.visits.length ? f.visits.map((v, i) => `<div class="visit">
       <div class="v-head"><div class="v-no">${i + 1}</div><div class="v-addr-l">現場住所</div><button class="v-del" data-act="vDel" data-i="${i}">削除</button></div>
       <div class="v-addr">
         <select class="inp v-sel ${v.pref ? '' : 'empty-sel'}" data-ch="vPref" data-i="${i}"><option value="">都道府県</option>${S.settings.regions.map(r => `<option value="${esc(r.pref)}" ${r.pref === v.pref ? 'selected' : ''}>${esc(r.pref)}</option>`).join('')}</select>
         <select class="inp v-sel ${v.city ? '' : 'empty-sel'}" data-ch="vCity" data-i="${i}" ${v.pref ? '' : 'disabled'}><option value="">市区町村</option>${((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities.includes(v.city) || !v.city ? [] : [v.city]).concat((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities).map(c => `<option value="${esc(c)}" ${c === v.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}${v.pref ? '<option value="__add">＋ リストにない市区町村を追加</option>' : ''}</select>
       </div>
-      <div class="v-foot">
-        <div class="v-kind"><button class="${v.cancel ? '' : 'on'}" data-act="vCancel" data-i="${i}" data-v="0">実施</button><button class="${v.cancel ? 'on cx' : ''}" data-act="vCancel" data-i="${i}" data-v="1">キャンセル</button></div>
-        ${v.cancel ? `<div class="v-cx">キャンセル ${yen(f.cancelPrice)}円</div>` : `<div class="v-con"><span class="v-lbl">成約</span>
-          <div class="mini-step"><button data-act="vCon" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCon" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div></div>`}
+      <div class="v-counts">
+        <div class="v-cnt "><div class="v-lbl">現場</div><div class="mini-step"><button data-act="vCnt" data-f="sites" data-i="${i}" data-n="-1" aria-label="現場を減らす">−</button><span>${v.sites}</span><button class="plus" data-act="vCnt" data-f="sites" data-i="${i}" data-n="1" aria-label="現場を増やす">＋</button></div></div>
+        <div class="v-cnt cx"><div class="v-lbl">キャンセル</div><div class="mini-step"><button data-act="vCnt" data-f="cancels" data-i="${i}" data-n="-1" aria-label="キャンセルを減らす">−</button><span>${v.cancels}</span><button class="plus" data-act="vCnt" data-f="cancels" data-i="${i}" data-n="1" aria-label="キャンセルを増やす">＋</button></div></div>
+        <div class="v-cnt "><div class="v-lbl">成約</div><div class="mini-step"><button data-act="vCnt" data-f="contracts" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCnt" data-f="contracts" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div></div>
       </div>
-    </div>`).join('') : '<div class="empty">「＋ 現場を追加」で、回った現場を1件ずつ登録します</div>'}
+    </div>`).join('') : '<div class="empty">「＋ 現場を追加」で現場住所を選び、件数を＋−で入れます</div>'}
     <div class="add-wrap"><button class="btn add-visit" data-act="vAdd">＋ 現場を追加</button></div>
     <div class="price-box">
       <div class="pb-t">単価<span>タップでこの日だけ変更</span></div>
@@ -1229,7 +1255,7 @@ function kvItems(a) {
     ['高速代', yen(a.highway) + '円'], ...EXP_CATS.map(c => [c.label, yen(a.exp[c.key]) + '円']), ['経費合計', yen(a.expTotal) + '円', 1], ['収支（売上合計−経費合計）', yen(a.profit) + '円', 1]];
 }
 function salesContent(d) {
-  if (d.visits && d.visits.length) return '住宅定期点検：' + d.visits.map(v => (v.city || '地区未設定') + (v.memo ? `（${v.memo}）` : '')).join('・');
+  if (d.visits && d.visits.length) return '住宅定期点検：' + normVisits(d.visits).map(v => (v.city || '地区未設定') + (v.sites ? `${v.sites}件` : '') + (v.cancels ? `(ｷｬﾝｾﾙ${v.cancels})` : '')).join('・');
   const ar = areaText(d.areas); return `住宅定期点検${ar ? '（' + ar + '）' : ''}`;
 }
 function expenseRows(f, t) {
@@ -1696,15 +1722,14 @@ const A = {
   pickVisit: el => openPicker('visit', +el.dataset.i),
   vAdd: () => {
     const f = ui.daily; const pl = lastVisitPlace(f.date);
-    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, memo: '', contracts: 0 });
+    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, sites: 1, cancels: 0, contracts: 0 });
     syncVisits(f); f.dirty = true; render(); refreshDailySummary();
     const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
   },
-  vCancel: el => { const v = ui.daily.visits[+el.dataset.i]; v.cancel = el.dataset.v === '1'; if (v.cancel) v.contracts = 0; syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
-  vCon: el => { const v = ui.daily.visits[+el.dataset.i]; v.contracts = Math.max(0, Math.min(99, v.contracts + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
+  vCnt: el => { const v = ui.daily.visits[+el.dataset.i], k = el.dataset.f; v[k] = Math.max(0, Math.min(99, (v[k] || 0) + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
   vDel: async el => {
     const i = +el.dataset.i, v = ui.daily.visits[i];
-    if ((v.memo || v.contracts) && !(await uiConfirm(`現場${i + 1}（${v.city || '地区未設定'}）を削除しますか？`, { ok: '削除する', danger: true }))) return;
+    if ((v.sites + v.cancels + v.contracts > 1) && !(await uiConfirm(`${i + 1}番目（${v.city || '地区未設定'}）を削除しますか？`, { ok: '削除する', danger: true }))) return;
     ui.daily.visits.splice(i, 1); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
   },
   closePicker: (el, e) => { if (el.dataset.self && e.target !== el) return; ui.picker = null; $('#overlay').innerHTML = ''; render(); },
