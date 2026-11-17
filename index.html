@@ -277,6 +277,25 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .v-cnt.cx .mini-step button.plus{color:#fff;background:var(--exp)}
 .v-cnt .mini-step{gap:3px}
 .v-cnt .mini-step button{width:32px;height:32px}
+.v-counts{grid-template-columns:1fr 1fr;padding:10px 6px}
+.v-kind2{display:flex;background:#EFE9E3;border-radius:999px;padding:3px;gap:2px}
+.v-kind2 button{border:0;background:none;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;color:var(--sub);font-family:"Zen Maru Gothic",sans-serif}
+.v-kind2 button.on{background:var(--main);color:#fff}
+.v-kind2 button.on.cx{background:var(--exp)}
+.mini-step.cx button{background:var(--exp-soft);color:var(--exp)}
+.mini-step.cx button.plus{background:var(--exp);color:#fff;box-shadow:0 3px 0 #B83945}
+.v-counts.is-cx{background:#FDF1F2}
+.v-na{font-size:11px;color:var(--muted);padding:10px 0;font-weight:700}
+.v-cnt .v-lbl{height:29px;display:flex;align-items:center}
+.price-box{padding:12px 12px 12px}
+.pb-t{font-size:14px;margin-bottom:8px}
+.pb-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pb-col{display:flex;flex-direction:column;align-items:center;gap:5px;background:#fff;border-radius:14px;padding:8px 4px}
+.pb-col .pb-l{font-family:"Zen Maru Gothic",sans-serif;font-weight:700;font-size:12px;color:var(--sub)}
+.pb-col.cx .pb-l{color:var(--exp)}
+.price-box .pb-col .price-chip{font-size:14px;padding:5px 8px;background:var(--main-soft);box-shadow:none;white-space:nowrap}
+.price-box .pb-col .price-chip.diff{background:var(--sun-soft)}
+.price-box .pb-col .price-note{margin:0;font-size:10px}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 70px);transform:translateX(-50%);background:rgba(26,26,26,.92);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;font-weight:700;z-index:90;animation:fade .2s;max-width:90vw;text-align:center}
 @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -419,7 +438,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.14.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -486,7 +505,9 @@ let S = { schema: SCHEMA_VERSION, settings: clone(DEFAULT_SETTINGS), daily: [], 
 /* 実績1日分。単価は登録時点の単価をレコードに保存しているため、
    設定で単価を変えても過去の売上は変わらない */
 /* 経費1（当日入力）：高速代のほかに日々入力する経費 */
-const DAY_EXP = [{ key: 'gas', label: 'ガソリン' }, { key: 'parking', label: '駐車場' }, { key: 'material', label: '材料費' }];
+const DAY_EXP = [{ key: 'gas', label: 'ガソリン', legacy: true }, { key: 'parking', label: '駐車場' }, { key: 'material', label: '材料費' }];
+/* 入力欄に出す項目（ガソリンは経費入力へ。過去に入力済みの日だけ表示） */
+const dayExpFields = f => DAY_EXP.filter(x => !x.legacy || (f.dayExp && f.dayExp[x.key]));
 const dayExpSum = d => DAY_EXP.reduce((a, x) => a + ((d.dayExp && d.dayExp[x.key]) || 0), 0);
 function calcDaily(d) {
   const site = d.sites * d.sitePrice;
@@ -626,25 +647,33 @@ const ui = {
 function mergeRows(rows) {
   const out = [];
   rows.forEach(r => {
-    const hit = r.city && out.find(o => o.pref === r.pref && o.city === r.city);
-    if (hit) { hit.sites += r.sites; hit.cancels += r.cancels; hit.contracts += r.contracts; }
-    else out.push(Object.assign({ id: uid() }, r));
+    const kind = r.kind || (r.cancels && !r.sites ? 'cancel' : 'site');
+    // 現場とキャンセルが混ざった行は2行に分ける
+    if (!r.kind && r.sites && r.cancels) { mergeInto(out, { pref: r.pref, city: r.city, kind: 'site', sites: r.sites, cancels: 0, contracts: r.contracts }); mergeInto(out, { pref: r.pref, city: r.city, kind: 'cancel', sites: 0, cancels: r.cancels, contracts: 0 }); return; }
+    mergeInto(out, Object.assign({}, r, { kind, sites: kind === 'site' ? (r.sites || 0) : 0, cancels: kind === 'cancel' ? (r.cancels || 0) : 0, contracts: kind === 'site' ? (r.contracts || 0) : 0 }));
   });
   return out;
+}
+function mergeInto(out, r) {
+  const hit = r.city && out.find(o => o.pref === r.pref && o.city === r.city && o.kind === r.kind);
+  if (hit) { hit.sites += r.sites; hit.cancels += r.cancels; hit.contracts += r.contracts; }
+  else out.push(Object.assign({ id: uid() }, r, { id: r.id || uid() }));
 }
 /* 旧形式（1現場1行・cancelフラグ）からの変換 */
 function normVisits(vs) {
   return mergeRows((vs || []).map(v => v.sites === undefined
-    ? { pref: v.pref || '', city: v.city || '', sites: v.cancel ? 0 : 1, cancels: v.cancel ? 1 : 0, contracts: v.contracts || 0 }
-    : { pref: v.pref || '', city: v.city || '', sites: v.sites || 0, cancels: v.cancels || 0, contracts: v.contracts || 0 }));
+    ? { pref: v.pref || '', city: v.city || '', sites: v.cancel ? 0 : 1, cancels: v.cancel ? 1 : 0, contracts: v.cancel ? 0 : (v.contracts || 0) }
+    : { pref: v.pref || '', city: v.city || '', kind: v.kind, sites: v.sites || 0, cancels: v.cancels || 0, contracts: v.contracts || 0 }));
 }
 /* 件数と地区から行を作る（旧データ・予定からの変換用） */
 function visitsFrom(areas, sites, contracts, cancels = 0) {
   const ar = areas && areas.length ? areas : [{ pref: '', city: '' }];
   const rows = ar.map(a => ({ pref: a.pref, city: a.city, sites: 0, cancels: 0, contracts: 0 }));
   for (let i = 0; i < sites; i++) rows[i % rows.length].sites++;
-  if (rows.length) { rows[0].contracts = contracts || 0; rows[0].cancels = cancels || 0; }
-  return mergeRows(rows.filter(r => r.sites || r.cancels || r.contracts));
+  if (rows.length) rows[0].contracts = contracts || 0;
+  const res = rows.filter(r => r.sites || r.contracts).map(r => Object.assign(r, { kind: 'site' }));
+  if (cancels) res.push({ pref: ar[0].pref, city: ar[0].city, kind: 'cancel', sites: 0, cancels, contracts: 0 });
+  return mergeRows(res);
 }
 /* 行から件数・成約件数・訪問地区を自動集計 */
 function syncVisits(f) {
@@ -845,9 +874,9 @@ function renderPicker() {
 }
 
 /* 単価チップ（タップで変更） */
-function priceChip(kind, f, price, std) {
+function priceChip(kind, f, price, std, short) {
   const diff = price !== std;
-  return `<button class="price-chip ${diff ? 'diff' : ''}" data-act="editPrice" data-kind="${kind}" data-f="${f}">1件 ${yen(price)}円 <span class="pen">✎</span></button>${diff ? '<span class="price-note">この日だけ</span>' : ''}`;
+  return `<button class="price-chip ${diff ? 'diff' : ''}" data-act="editPrice" data-kind="${kind}" data-f="${f}">${short ? '' : '1件 '}${yen(price)}円 <span class="pen">✎</span></button>${diff ? '<span class="price-note">この日だけ</span>' : ''}`;
 }
 
 /* ---------- 日次入力 ---------- */
@@ -874,7 +903,7 @@ function viewDaily() {
 <div class="card"><div class="sec-t">当日の経費（経費1）<span class="r">合計 <b class="c-exp" id="d-cost">${yen(f.highway + dayExpSum(f))}</b>円</span></div>
     <div class="dx-row"><span class="dx-l">高速代</span><div class="yen-in dx-in"><input inputmode="numeric" pattern="[0-9]*" placeholder="0" value="${f.highway || ''}" data-in="dHighway" id="d-highway"><span>円</span></div></div>
     <div class="quick dx-quick">${lastHighways().map(v => `<button data-act="setHighway" data-v="${v}">${yen(v)}円</button>`).join('')}<button data-act="setHighway" data-v="0">0円</button></div>
-    ${DAY_EXP.map(x => `<div class="dx-row"><span class="dx-l">${x.label}</span><div class="yen-in dx-in"><input inputmode="numeric" pattern="[0-9]*" placeholder="0" value="${f.dayExp[x.key] || ''}" data-in="dExp" data-k="${x.key}"><span>円</span></div></div>`).join('')}
+    ${dayExpFields(f).map(x => `<div class="dx-row"><span class="dx-l">${x.label}</span><div class="yen-in dx-in"><input inputmode="numeric" pattern="[0-9]*" placeholder="0" value="${f.dayExp[x.key] || ''}" data-in="dExp" data-k="${x.key}"><span>円</span></div></div>`).join('')}
   </div>
   <div class="card" id="d-sum">${dailySummaryHtml()}</div>`;
   if (ex) h += `<button class="btn danger" data-act="delDaily">この日の実績を削除</button><div class="sp"></div>`;
@@ -898,18 +927,25 @@ function visitsCard(f) {
         <select class="inp v-sel ${v.pref ? '' : 'empty-sel'}" data-ch="vPref" data-i="${i}"><option value="">都道府県</option>${S.settings.regions.map(r => `<option value="${esc(r.pref)}" ${r.pref === v.pref ? 'selected' : ''}>${esc(r.pref)}</option>`).join('')}</select>
         <select class="inp v-sel ${v.city ? '' : 'empty-sel'}" data-ch="vCity" data-i="${i}" ${v.pref ? '' : 'disabled'}><option value="">市区町村</option>${((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities.includes(v.city) || !v.city ? [] : [v.city]).concat((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities).map(c => `<option value="${esc(c)}" ${c === v.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}${v.pref ? '<option value="__add">＋ リストにない市区町村を追加</option>' : ''}</select>
       </div>
-      <div class="v-counts">
-        <div class="v-cnt "><div class="v-lbl">現場</div><div class="mini-step"><button data-act="vCnt" data-f="sites" data-i="${i}" data-n="-1" aria-label="現場を減らす">−</button><span>${v.sites}</span><button class="plus" data-act="vCnt" data-f="sites" data-i="${i}" data-n="1" aria-label="現場を増やす">＋</button></div></div>
-        <div class="v-cnt cx"><div class="v-lbl">キャンセル</div><div class="mini-step"><button data-act="vCnt" data-f="cancels" data-i="${i}" data-n="-1" aria-label="キャンセルを減らす">−</button><span>${v.cancels}</span><button class="plus" data-act="vCnt" data-f="cancels" data-i="${i}" data-n="1" aria-label="キャンセルを増やす">＋</button></div></div>
-        <div class="v-cnt "><div class="v-lbl">成約</div><div class="mini-step"><button data-act="vCnt" data-f="contracts" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCnt" data-f="contracts" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div></div>
+      <div class="v-counts ${v.kind === 'cancel' ? 'is-cx' : ''}">
+        <div class="v-cnt">
+          <div class="v-kind2"><button class="${v.kind !== 'cancel' ? 'on' : ''}" data-act="vKind" data-i="${i}" data-k="site">現場</button><button class="${v.kind === 'cancel' ? 'on cx' : ''}" data-act="vKind" data-i="${i}" data-k="cancel">キャンセル</button></div>
+          <div class="mini-step ${v.kind === 'cancel' ? 'cx' : ''}"><button data-act="vCnt" data-f="${v.kind === 'cancel' ? 'cancels' : 'sites'}" data-i="${i}" data-n="-1" aria-label="減らす">−</button><span>${v.kind === 'cancel' ? v.cancels : v.sites}</span><button class="plus" data-act="vCnt" data-f="${v.kind === 'cancel' ? 'cancels' : 'sites'}" data-i="${i}" data-n="1" aria-label="増やす">＋</button></div>
+        </div>
+        <div class="v-cnt">
+          <div class="v-lbl">成約</div>
+          ${v.kind === 'cancel' ? '<div class="v-na">キャンセルは成約なし</div>' : `<div class="mini-step"><button data-act="vCnt" data-f="contracts" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCnt" data-f="contracts" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>`}
+        </div>
       </div>
     </div>`).join('') : '<div class="empty">「＋ 現場を追加」で現場住所を選び、件数を＋−で入れます</div>'}
     <div class="add-wrap"><button class="btn add-visit" data-act="vAdd">＋ 現場を追加</button></div>
     <div class="price-box">
       <div class="pb-t">単価<span>タップでこの日だけ変更</span></div>
-      <div class="pb-row"><span class="pb-l">現場</span>${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice)}</div>
-      <div class="pb-row"><span class="pb-l">キャンセル</span>${priceChip('daily', 'cancel', f.cancelPrice, S.settings.cancelPrice)}</div>
-      <div class="pb-row"><span class="pb-l">成約</span>${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice)}</div>
+      <div class="pb-grid">
+        <div class="pb-col"><span class="pb-l">現場</span>${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice, true)}</div>
+        <div class="pb-col cx"><span class="pb-l">キャンセル</span>${priceChip('daily', 'cancel', f.cancelPrice, S.settings.cancelPrice, true)}</div>
+        <div class="pb-col"><span class="pb-l">成約</span>${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice, true)}</div>
+      </div>
     </div>
   </div>`;
 }
@@ -926,7 +962,7 @@ function dailySummaryHtml() {
     <div class="sum-row"><span class="k">成約売上<small>${ui.daily.contracts}件×${yen(ui.daily.contractPrice)}円</small></span>${Y(c.contract, 'c-sales')}</div>
     <div class="sum-row total"><span class="k">売上合計</span>${Y(c.sales, 'c-sales')}</div>
     <div class="sum-row"><span class="k">高速代</span>${Y(-c.highway, 'c-exp')}</div>
-    ${DAY_EXP.filter(x => ui.daily.dayExp[x.key]).map(x => `<div class="sum-row"><span class="k">${x.label}</span>${Y(-ui.daily.dayExp[x.key], 'c-exp')}</div>`).join('')}
+    ${dayExpFields(ui.daily).map(x => `<div class="sum-row"><span class="k">${x.label}</span>${Y(-(ui.daily.dayExp[x.key] || 0), 'c-exp')}</div>`).join('')}
     <div class="sum-row grand total"><span class="k">当日利益<small>暫定</small></span>${Y(c.profit, profitCls(c.profit))}</div>`;
 }
 function refreshDailySummary() {
@@ -1722,9 +1758,15 @@ const A = {
   pickVisit: el => openPicker('visit', +el.dataset.i),
   vAdd: () => {
     const f = ui.daily; const pl = lastVisitPlace(f.date);
-    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, sites: 1, cancels: 0, contracts: 0 });
+    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 1, cancels: 0, contracts: 0 });
     syncVisits(f); f.dirty = true; render(); refreshDailySummary();
     const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+  vKind: el => {
+    const v = ui.daily.visits[+el.dataset.i], k = el.dataset.k; if (v.kind === k || (!v.kind && k === 'site')) return;
+    const n = Math.max(1, v.sites + v.cancels);
+    if (k === 'cancel') Object.assign(v, { kind: 'cancel', cancels: n, sites: 0, contracts: 0 }); else Object.assign(v, { kind: 'site', sites: n, cancels: 0 });
+    syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
   },
   vCnt: el => { const v = ui.daily.visits[+el.dataset.i], k = el.dataset.f; v[k] = Math.max(0, Math.min(99, (v[k] || 0) + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
   vDel: async el => {
