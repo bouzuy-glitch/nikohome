@@ -296,6 +296,10 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .price-box .pb-col .price-chip{font-size:14px;padding:5px 8px;background:var(--main-soft);box-shadow:none;white-space:nowrap}
 .price-box .pb-col .price-chip.diff{background:var(--sun-soft)}
 .price-box .pb-col .price-note{margin:0;font-size:10px}
+.row-price{border:0;background:#fff;color:var(--main-dark);border-radius:999px;padding:3px 9px;font-size:12px;font-family:"Mochiy Pop One",sans-serif;box-shadow:inset 0 0 0 1.5px #F3D3B6;margin-top:2px}
+.row-price .pen{font-size:10px;opacity:.7}
+.row-price.cx{color:var(--exp);box-shadow:inset 0 0 0 1.5px #F3B7BD}
+.row-price.diff{background:var(--sun-soft);color:#9A6200;box-shadow:inset 0 0 0 1.5px var(--sun)}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 70px);transform:translateX(-50%);background:rgba(26,26,26,.92);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;font-weight:700;z-index:90;animation:fade .2s;max-width:90vw;text-align:center}
 @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -438,7 +442,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -509,10 +513,22 @@ const DAY_EXP = [{ key: 'gas', label: 'ガソリン', legacy: true }, { key: 'pa
 /* 入力欄に出す項目（ガソリンは経費入力へ。過去に入力済みの日だけ表示） */
 const dayExpFields = f => DAY_EXP.filter(x => !x.legacy || (f.dayExp && f.dayExp[x.key]));
 const dayExpSum = d => DAY_EXP.reduce((a, x) => a + ((d.dayExp && d.dayExp[x.key]) || 0), 0);
+/* 行（現場住所の欄）ごとの単価。未設定なら日の単価 */
+const rowPrice = (v, d) => v.price != null ? v.price : (v.kind === 'cancel' ? (d.cancelPrice != null ? d.cancelPrice : 5500) : d.sitePrice);
+const rowCPrice = (v, d) => v.cPrice != null ? v.cPrice : d.contractPrice;
 function calcDaily(d) {
-  const site = d.sites * d.sitePrice;
-  const contract = d.contracts * d.contractPrice;
-  const cancel = (d.cancels || 0) * (d.cancelPrice != null ? d.cancelPrice : 5500);
+  let site, cancel, contract;
+  if (d.visits && d.visits.length && d.visits.every(v => v.sites !== undefined)) {
+    site = 0; cancel = 0; contract = 0;
+    for (const v of d.visits) {
+      if (v.kind === 'cancel') cancel += (v.cancels || 0) * rowPrice(v, d); else site += (v.sites || 0) * rowPrice(v, d);
+      contract += (v.contracts || 0) * rowCPrice(v, d);
+    }
+  } else {  // 旧形式：日の件数×日の単価
+    site = d.sites * d.sitePrice;
+    contract = d.contracts * d.contractPrice;
+    cancel = (d.cancels || 0) * (d.cancelPrice != null ? d.cancelPrice : 5500);
+  }
   const sales = site + cancel + contract;
   const dayExp = dayExpSum(d), cost = d.highway + dayExp;
   return { site, cancel, contract, sales, highway: d.highway, dayExp, cost, profit: sales - cost };
@@ -655,15 +671,21 @@ function mergeRows(rows) {
   return out;
 }
 function mergeInto(out, r) {
-  const hit = r.city && out.find(o => o.pref === r.pref && o.city === r.city && o.kind === r.kind);
+  const hit = r.city && out.find(o => o.pref === r.pref && o.city === r.city && o.kind === r.kind && o.price === r.price && o.cPrice === r.cPrice);
   if (hit) { hit.sites += r.sites; hit.cancels += r.cancels; hit.contracts += r.contracts; }
   else out.push(Object.assign({ id: uid() }, r, { id: r.id || uid() }));
 }
 /* 旧形式（1現場1行・cancelフラグ）からの変換 */
-function normVisits(vs) {
-  return mergeRows((vs || []).map(v => v.sites === undefined
+function normVisits(vs, d) {
+  const rows = mergeRows((vs || []).map(v => v.sites === undefined
     ? { pref: v.pref || '', city: v.city || '', sites: v.cancel ? 0 : 1, cancels: v.cancel ? 1 : 0, contracts: v.cancel ? 0 : (v.contracts || 0) }
-    : { pref: v.pref || '', city: v.city || '', kind: v.kind, sites: v.sites || 0, cancels: v.cancels || 0, contracts: v.contracts || 0 }));
+    : { pref: v.pref || '', city: v.city || '', kind: v.kind, sites: v.sites || 0, cancels: v.cancels || 0, contracts: v.contracts || 0, price: v.price, cPrice: v.cPrice }));
+  return d ? withPrices(rows, d) : rows;
+}
+/* 単価のない行に日の単価を入れる（保存済みの金額を変えないため） */
+function withPrices(rows, d) {
+  rows.forEach(v => { if (v.price == null) v.price = rowPrice(v, d); if (v.cPrice == null) v.cPrice = rowCPrice(v, d); });
+  return rows;
 }
 /* 件数と地区から行を作る（旧データ・予定からの変換用） */
 function visitsFrom(areas, sites, contracts, cancels = 0) {
@@ -686,9 +708,9 @@ function syncVisits(f) {
 }
 function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
-  if (ex) return withAutoRow({ date, id: ex.id, visits: ex.visits && ex.visits.length ? normVisits(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts, ex.cancels || 0), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
+  if (ex) return withAutoRow({ date, id: ex.id, visits: withPrices(ex.visits && ex.visits.length ? normVisits(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts, ex.cancels || 0), Object.assign({ cancelPrice: S.settings.cancelPrice }, ex)), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
-  return withAutoRow({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, 0) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
+  return withAutoRow({ date, id: null, visits: p ? withPrices(visitsFrom(p.areas, p.sites, 0), { sitePrice: planPrice(p, S.settings, 'sitePrice'), cancelPrice: S.settings.cancelPrice, contractPrice: planPrice(p, S.settings, 'contractPrice') }) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
     cancelPrice: S.settings.cancelPrice, sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
 }
 function prevPlace(beforeDate) {
@@ -698,7 +720,7 @@ function prevPlace(beforeDate) {
   return { pref: l.pref || '', city: l.city || '' };
 }
 /* 日次入力を開いたときに最初から出しておく住所の欄（件数は0から） */
-function autoRow(date) { const pl = prevPlace(date); return { id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0 }; }
+function autoRow(date) { const pl = prevPlace(date); return { id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0, price: S.settings.sitePrice, cPrice: S.settings.contractPrice }; }
 function withAutoRow(f) { if (!f.visits.length) f.visits.push(autoRow(f.date)); return syncVisits(f); }
 function lastVisitPlace(beforeDate) {
   const f = ui.daily; if (f && f.visits.length) { const v = f.visits[f.visits.length - 1]; if (v.city) return { pref: v.pref, city: v.city }; }
@@ -940,23 +962,28 @@ function visitsCard(f) {
         <div class="v-cnt">
           <div class="v-kind2"><button class="${v.kind !== 'cancel' ? 'on' : ''}" data-act="vKind" data-i="${i}" data-k="site">現場</button><button class="${v.kind === 'cancel' ? 'on cx' : ''}" data-act="vKind" data-i="${i}" data-k="cancel">キャンセル</button></div>
           <div class="mini-step ${v.kind === 'cancel' ? 'cx' : ''}"><button data-act="vCnt" data-f="${v.kind === 'cancel' ? 'cancels' : 'sites'}" data-i="${i}" data-n="-1" aria-label="減らす">−</button><span>${v.kind === 'cancel' ? v.cancels : v.sites}</span><button class="plus" data-act="vCnt" data-f="${v.kind === 'cancel' ? 'cancels' : 'sites'}" data-i="${i}" data-n="1" aria-label="増やす">＋</button></div>
+          ${rowChip(i, 'price', v.price, v.kind === 'cancel' ? S.settings.cancelPrice : S.settings.sitePrice, v.kind === 'cancel')}
         </div>
         <div class="v-cnt">
           <div class="v-lbl">成約</div>
-          ${v.kind === 'cancel' ? '<div class="v-na">キャンセルは成約なし</div>' : `<div class="mini-step"><button data-act="vCnt" data-f="contracts" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCnt" data-f="contracts" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>`}
+          ${v.kind === 'cancel' ? '<div class="v-na">キャンセルは成約なし</div>' : `<div class="mini-step"><button data-act="vCnt" data-f="contracts" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCnt" data-f="contracts" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>${rowChip(i, 'cPrice', v.cPrice, S.settings.contractPrice)}`}
         </div>
       </div>
     </div>`).join('') : '<div class="empty">「＋ 現場を追加」で現場住所を選び、件数を＋−で入れます</div>'}
     <div class="add-wrap"><button class="btn add-visit" data-act="vAdd">＋ 現場を追加</button></div>
-    <div class="price-box">
-      <div class="pb-t">単価<span>タップでこの日だけ変更</span></div>
-      <div class="pb-grid">
-        <div class="pb-col"><span class="pb-l">現場</span>${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice, true)}</div>
-        <div class="pb-col cx"><span class="pb-l">キャンセル</span>${priceChip('daily', 'cancel', f.cancelPrice, S.settings.cancelPrice, true)}</div>
-        <div class="pb-col"><span class="pb-l">成約</span>${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice, true)}</div>
-      </div>
-    </div>
   </div>`;
+}
+function rowChip(i, f, price, std, cx) {
+  const diff = price !== std;
+  return `<button class="row-price ${diff ? 'diff' : ''} ${cx ? 'cx' : ''}" data-act="rowPrice" data-i="${i}" data-f="${f}">@${yen(price)}円 <span class="pen">✎</span></button>`;
+}
+/* 単価の表示：全行同じなら「n件×単価」、違えば「n件（単価混在）」 */
+function priceText(f, kind) {
+  const d = ui.daily; const cnt = kind === 'contract' ? 'contracts' : kind === 'cancel' ? 'cancels' : 'sites';
+  const rows = d.visits.filter(v => (v[cnt] || 0) > 0);
+  const ps = [...new Set(rows.map(v => kind === 'contract' ? rowCPrice(v, d) : rowPrice(v, d)))];
+  const n = d[cnt] || 0;
+  return ps.length > 1 ? `${n}件（単価混在）` : `${n}件×${yen(ps[0] != null ? ps[0] : (kind === 'contract' ? d.contractPrice : kind === 'cancel' ? d.cancelPrice : d.sitePrice))}円`;
 }
 function setVisitPlace(pref, city) {
   const v = ui.daily.visits[ui.picker.i]; if (v) { v.pref = pref; v.city = city; }
@@ -966,9 +993,9 @@ function setVisitPlace(pref, city) {
 function dailySummaryHtml() {
   const c = calcDaily(ui.daily);
   return `<div class="sec-t">当日の収支（自動計算）</div>
-    <div class="sum-row"><span class="k">現場売上<small>${ui.daily.sites}件×${yen(ui.daily.sitePrice)}円</small></span>${Y(c.site, 'c-sales')}</div>
-    <div class="sum-row"><span class="k">キャンセル売上<small>${ui.daily.cancels}件×${yen(ui.daily.cancelPrice)}円</small></span>${Y(c.cancel, 'c-sales')}</div>
-    <div class="sum-row"><span class="k">成約売上<small>${ui.daily.contracts}件×${yen(ui.daily.contractPrice)}円</small></span>${Y(c.contract, 'c-sales')}</div>
+    <div class="sum-row"><span class="k">現場売上<small>${priceText(ui.daily, 'site')}</small></span>${Y(c.site, 'c-sales')}</div>
+    <div class="sum-row"><span class="k">キャンセル売上<small>${priceText(ui.daily, 'cancel')}</small></span>${Y(c.cancel, 'c-sales')}</div>
+    <div class="sum-row"><span class="k">成約売上<small>${priceText(ui.daily, 'contract')}</small></span>${Y(c.contract, 'c-sales')}</div>
     <div class="sum-row total"><span class="k">売上合計</span>${Y(c.sales, 'c-sales')}</div>
     <div class="sum-row"><span class="k">高速代</span>${Y(-c.highway, 'c-exp')}</div>
     ${dayExpFields(ui.daily).map(x => `<div class="sum-row"><span class="k">${x.label}</span>${Y(-(ui.daily.dayExp[x.key] || 0), 'c-exp')}</div>`).join('')}
@@ -1519,7 +1546,7 @@ function viewSettings() {
     <div class="field"><label>1現場単価</label><div class="yen-in"><input inputmode="numeric" value="${st.sitePrice}" data-ch="setSite"><span>円</span></div></div>
     <div class="field"><label>キャンセル現場 1件単価</label><div class="yen-in"><input inputmode="numeric" value="${st.cancelPrice}" data-ch="setCancel"><span>円</span></div></div>
     <div class="field"><label>1成約単価</label><div class="yen-in"><input inputmode="numeric" value="${st.contractPrice}" data-ch="setContract"><span>円</span></div></div>
-    <div class="small-note">ここは標準の単価です。変更すると、これから入力する実績と、単価を個別に変えていない予定に反映されます。日によって単価が違う場合は、日次入力・予定入力の「1件○円」をタップするとその日だけ変更できます。登録済みの実績は、登録した時点の単価のまま保存されます（過去の売上は変わりません）。</div>
+    <div class="small-note">ここは標準の単価です。変更すると、これから入力する実績と、単価を個別に変えていない予定に反映されます。単価が違う現場は、日次入力の各欄の「@○円」をタップするとその欄だけ変更できます。登録済みの実績は、登録した時点の単価のまま保存されます（過去の売上は変わりません）。</div>
   </div>
   <div class="card"><div class="sec-t">都道府県・市区町村リスト</div>
     <div class="chips">${st.regions.map((r, i) => `<button class="chip ${i === ui.setPref ? 'on' : ''}" data-act="setPrefTab" data-i="${i}">${esc(r.pref)}</button>`).join('')}</div>
@@ -1570,6 +1597,8 @@ async function saveDaily() {
   const now = new Date().toISOString();
   let rec = f.id ? S.daily.find(d => d.id === f.id) : null;
   syncVisits(f);
+  { const fs = f.visits.find(v => v.kind !== 'cancel'), fc = f.visits.find(v => v.kind === 'cancel');
+    if (fs) { f.sitePrice = fs.price; f.contractPrice = fs.cPrice; } if (fc) f.cancelPrice = fc.price; }
   const data = { date: f.date, visits: clone(f.visits), areas: clone(f.areas), sites: f.sites, cancels: f.cancels, cancelPrice: f.cancelPrice, contracts: f.contracts, highway: f.highway, dayExp: clone(f.dayExp), sitePrice: f.sitePrice, contractPrice: f.contractPrice };
   if (rec) Object.assign(rec, data, { updatedAt: now });
   else { rec = Object.assign({ id: uid(), createdAt: now, updatedAt: now, planId: null, memo: '', ext: {} }, data); S.daily.push(rec); }
@@ -1714,7 +1743,7 @@ function priceDialog(label, cur, std) {
       <div class="yen-in mt12"><input inputmode="numeric" pattern="[0-9]*" value="${cur}" class="pd-in"><span>円</span></div>
       <div class="quick">${[...new Set([std, cur])].map(v => `<button class="pd-q" data-v="${v}">${yen(v)}円${v === std ? '（標準）' : ''}</button>`).join('')}</div>
       <label class="pd-chk"><input type="checkbox" class="pd-def"> 今後の標準単価（設定）にもする</label>
-      <div class="small-note" style="margin-top:4px">チェックしない場合は、この日だけの単価になります。</div>
+      <div class="small-note" style="margin-top:4px">チェックしない場合は、この欄だけの単価になります。</div>
       <div class="row mt12"><button class="btn ghost pd-cancel">キャンセル</button><button class="btn pd-ok">変更する</button></div></div>`;
     document.body.appendChild(w);
     const inp = w.querySelector('.pd-in'); setTimeout(() => { inp.focus(); inp.select(); }, 50);
@@ -1768,14 +1797,26 @@ const A = {
   pickVisit: el => openPicker('visit', +el.dataset.i),
   vAdd: () => {
     const f = ui.daily; const pl = lastVisitPlace(f.date);
-    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0 });
+    const lastSite = [...f.visits].reverse().find(v => v.kind !== 'cancel');  // 直前の現場の単価を引き継ぐ
+    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0,
+      price: lastSite && lastSite.price != null ? lastSite.price : S.settings.sitePrice, cPrice: lastSite && lastSite.cPrice != null ? lastSite.cPrice : S.settings.contractPrice });
     syncVisits(f); f.dirty = true; render(); refreshDailySummary();
     const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+  rowPrice: async el => {
+    const v = ui.daily.visits[+el.dataset.i], f = el.dataset.f;
+    const key = f === 'cPrice' ? 'contractPrice' : v.kind === 'cancel' ? 'cancelPrice' : 'sitePrice';
+    const label = f === 'cPrice' ? '成約単価' : v.kind === 'cancel' ? 'キャンセル単価' : '現場単価';
+    const r = await priceDialog(`${+el.dataset.i + 1}番目の${label}`, v[f], S.settings[key]); if (!r) return;
+    v[f] = r.price;
+    if (r.setDefault) { S.settings[key] = r.price; await persist(); }
+    syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
+    toast(r.setDefault ? `${label}を${yen(r.price)}円にしました（標準も変更）` : `${label}を${yen(r.price)}円にしました`);
   },
   vKind: el => {
     const v = ui.daily.visits[+el.dataset.i], k = el.dataset.k; if (v.kind === k || (!v.kind && k === 'site')) return;
     const n = v.sites + v.cancels;
-    if (k === 'cancel') Object.assign(v, { kind: 'cancel', cancels: n, sites: 0, contracts: 0 }); else Object.assign(v, { kind: 'site', sites: n, cancels: 0 });
+    if (k === 'cancel') Object.assign(v, { kind: 'cancel', cancels: n, sites: 0, contracts: 0, price: S.settings.cancelPrice }); else Object.assign(v, { kind: 'site', sites: n, cancels: 0, price: S.settings.sitePrice });
     syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
   },
   vCnt: el => { const v = ui.daily.visits[+el.dataset.i], k = el.dataset.f; v[k] = Math.max(0, Math.min(99, (v[k] || 0) + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
