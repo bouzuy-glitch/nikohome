@@ -226,6 +226,24 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .price-row>span{display:flex;align-items:center;gap:6px}
 .price-row .price-chip{margin-top:0}
 .sec-t .r b{font-family:"Mochiy Pop One",sans-serif;font-weight:400;font-size:15px;margin:0 2px}
+.add-wrap{display:flex;justify-content:center;margin-top:12px}
+.btn.add-visit{width:auto;padding:10px 22px;font-size:14px;box-shadow:0 3px 0 var(--main-dark)}
+.price-box{margin-top:14px;background:var(--main-soft);border-radius:18px;padding:12px 14px 6px}
+.pb-t{font-family:"Mochiy Pop One",sans-serif;font-size:15px;color:var(--main-dark);margin-bottom:4px;display:flex;align-items:baseline;gap:8px}
+.pb-t span{font-family:"Zen Maru Gothic",sans-serif;font-size:11px;color:var(--muted);font-weight:700}
+.pb-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1.5px dashed #F6D2B3}
+.pb-row:nth-child(2){border-top:0}
+.pb-l{font-family:"Mochiy Pop One",sans-serif;font-size:16px;color:var(--text)}
+.price-box .price-chip{font-size:17px;padding:8px 16px;margin:0;background:#fff;font-family:"Mochiy Pop One",sans-serif;font-weight:400;box-shadow:0 2px 0 #F3CFAE}
+.price-box .price-chip.diff{background:var(--sun-soft)}
+.price-box .price-note{display:inline;margin-left:6px}
+.v-kind{display:flex;gap:4px;background:#F1EEEB;border-radius:999px;padding:3px;align-self:flex-start}
+.v-kind button{border:0;background:none;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:700;color:var(--sub);font-family:"Zen Maru Gothic",sans-serif}
+.v-kind button.on{background:#fff;color:var(--main-dark);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.v-kind button.on.cx{background:var(--exp);color:#fff}
+.visit.is-cancel .v-no{background:var(--exp)}
+.visit.is-cancel .v-city.on{background:#F3B7BD}
+.v-cx{font-family:"Mochiy Pop One",sans-serif;font-size:14px;color:var(--exp);padding:6px 0}
 .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 70px);transform:translateX(-50%);background:rgba(26,26,26,.92);color:#fff;padding:11px 18px;border-radius:999px;font-size:14px;font-weight:700;z-index:90;animation:fade .2s;max-width:90vw;text-align:center}
 @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 @keyframes fade{from{opacity:0}to{opacity:1}}
@@ -368,7 +386,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -405,6 +423,7 @@ const DEFAULT_SETTINGS = {
   color: '#F07818',
   sitePrice: 8000,      // 1現場単価
   contractPrice: 900,   // 1成約単価
+  cancelPrice: 5500,    // キャンセル現場 1件単価
   year: 'auto',         // 表示年度（auto=今年）
   regions: DEFAULT_REGIONS,
   lastBackup: null,
@@ -412,10 +431,12 @@ const DEFAULT_SETTINGS = {
 /* 経費2の科目。account は確定申告用集計での勘定科目（目安） */
 const EXP_CATS = [
   { key: 'gas',    label: 'ガソリン代', account: '車両費' },
+  { key: 'oil',    label: 'オイル交換', account: '車両費' },
   { key: 'tool',   label: '道具代',     account: '消耗品費' },
   { key: 'supply', label: '備品代',     sub: '紙・インク等', account: '消耗品費' },
-  { key: 'other',  label: 'その他',     account: '雑費' },
   { key: 'enter',  label: '交際費',     account: '接待交際費' },
+  { key: 'golf',   label: 'ゴルフ',     account: '接待交際費' },
+  { key: 'other',  label: 'その他',     account: '雑費' },
 ];
 const HIGHWAY_ACCOUNT = '旅費交通費';
 const PAY_METHODS = ['', '現金', 'クレジットカード', '電子マネー', '口座振替・振込', 'その他'];
@@ -432,8 +453,9 @@ let S = { schema: SCHEMA_VERSION, settings: clone(DEFAULT_SETTINGS), daily: [], 
 function calcDaily(d) {
   const site = d.sites * d.sitePrice;
   const contract = d.contracts * d.contractPrice;
-  const sales = site + contract;
-  return { site, contract, sales, highway: d.highway, profit: sales - d.highway };
+  const cancel = (d.cancels || 0) * (d.cancelPrice != null ? d.cancelPrice : 5500);
+  const sales = site + cancel + contract;
+  return { site, cancel, contract, sales, highway: d.highway, profit: sales - d.highway };
 }
 /* 予定1件分。予定は将来のものなので現在の設定単価で計算 */
 const planPrice = (p, st, key) => (p[key] != null ? p[key] : st[key]);  // 予定ごとの単価（未指定なら設定の標準単価）
@@ -446,12 +468,13 @@ function calcPlan(p, st) {
 }
 /* 実績集計（予定は一切含めない） */
 function aggregate(st, from, to) {
-  const r = { days: 0, sites: 0, contracts: 0, site: 0, contract: 0, sales: 0, highway: 0, exp: {}, exp2: 0, expTotal: 0, profit: 0 };
+  const r = { days: 0, sites: 0, cancels: 0, contracts: 0, site: 0, cancel: 0, contract: 0, sales: 0, highway: 0, exp: {}, exp2: 0, expTotal: 0, profit: 0 };
   EXP_CATS.forEach(c => r.exp[c.key] = 0);
   for (const d of st.daily) {
     if (d.date < from || d.date > to) continue;
     const c = calcDaily(d);
     r.days++; r.sites += d.sites; r.contracts += d.contracts;
+    r.cancels += d.cancels || 0; r.cancel += c.cancel;
     r.site += c.site; r.contract += c.contract; r.sales += c.sales; r.highway += d.highway;
   }
   for (const e of st.expenses) {
@@ -530,7 +553,7 @@ function normalizeState(raw) {
   st.settings = Object.assign(clone(DEFAULT_SETTINGS), st.settings || {});
   if (['Mayuシステム', 'DEKIRU LIFE'].includes(st.settings.appName)) st.settings.appName = 'にこほーむ';  // 旧アプリ名から移行
   if (!Array.isArray(st.settings.regions) || !st.settings.regions.length) st.settings.regions = clone(DEFAULT_REGIONS);
-  st.daily = (st.daily || []).map(d => Object.assign({ areas: [], sites: 0, contracts: 0, highway: 0, sitePrice: st.settings.sitePrice, contractPrice: st.settings.contractPrice, planId: null, memo: '', visits: null, ext: {} }, d));
+  st.daily = (st.daily || []).map(d => Object.assign({ areas: [], sites: 0, cancels: 0, cancelPrice: st.settings.cancelPrice, contracts: 0, highway: 0, sitePrice: st.settings.sitePrice, contractPrice: st.settings.contractPrice, planId: null, memo: '', visits: null, ext: {} }, d));
   st.plans = (st.plans || []).map(p => Object.assign({ areas: [], sites: 0, contracts: 0, highway: 0, memo: '', status: 'planned', convertedTo: null, ext: {} }, p));
   st.expenses = (st.expenses || []).map(e => Object.assign({ payee: '', desc: '', receiptId: null, payMethod: '', ext: {} }, e));
   return st;
@@ -564,7 +587,9 @@ function visitsFrom(areas, sites, contracts) {
 }
 /* 現場リストから件数・成約件数・訪問地区を自動集計 */
 function syncVisits(f) {
-  f.sites = f.visits.length;
+  f.visits.forEach(v => { if (v.cancel) v.contracts = 0; });
+  f.sites = f.visits.filter(v => !v.cancel).length;
+  f.cancels = f.visits.filter(v => v.cancel).length;
   f.contracts = f.visits.reduce((a, v) => a + (v.contracts || 0), 0);
   const seen = new Set(); f.areas = [];
   f.visits.forEach(v => { const k = v.pref + '|' + v.city; if (v.city && !seen.has(k)) { seen.add(k); f.areas.push({ pref: v.pref, city: v.city }); } });
@@ -572,10 +597,10 @@ function syncVisits(f) {
 }
 function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
-  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? clone(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts), highway: ex.highway, sitePrice: ex.sitePrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
+  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? clone(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts), highway: ex.highway, sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
   return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, p.contracts) : [], highway: p ? (p.highway || 0) : 0,
-    sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
+    cancelPrice: S.settings.cancelPrice, sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
 }
 function lastVisitPlace(beforeDate) {
   const f = ui.daily; if (f && f.visits.length) { const v = f.visits[f.visits.length - 1]; if (v.city) return { pref: v.pref, city: v.city }; }
@@ -805,19 +830,25 @@ function viewDaily() {
 }
 function visitsCard(f) {
   const prefShort = p => esc((p || '').replace(/[県都府]$/, ''));
-  return `<div class="card" id="visits"><div class="sec-t">今日の現場 <span class="r"><b class="c-sales">${f.sites}</b>件・成約<b class="c-sales">${f.contracts}</b>件</span></div>
-    ${f.visits.length ? f.visits.map((v, i) => `<div class="visit">
+  return `<div class="card" id="visits"><div class="sec-t">今日の現場 <span class="r">現場<b class="c-sales">${f.sites}</b>・キャンセル<b class="c-exp">${f.cancels}</b>・成約<b class="c-sales">${f.contracts}</b></span></div>
+    ${f.visits.length ? f.visits.map((v, i) => `<div class="visit ${v.cancel ? 'is-cancel' : ''}">
       <div class="v-no">${i + 1}</div>
       <div class="v-main">
         <button class="chip v-city ${v.city ? 'on' : ''}" data-act="pickVisit" data-i="${i}">${v.city ? `<small>${prefShort(v.pref)}</small>${esc(v.city)}` : '地区を選ぶ'} ▾</button>
         <input class="inp v-memo" placeholder="邸名・メモ（任意）" value="${esc(v.memo)}" data-in="vMemo" data-i="${i}">
+        <div class="v-kind"><button class="${v.cancel ? '' : 'on'}" data-act="vCancel" data-i="${i}" data-v="0">実施</button><button class="${v.cancel ? 'on cx' : ''}" data-act="vCancel" data-i="${i}" data-v="1">キャンセル</button></div>
       </div>
-      <div class="v-side"><div class="v-lbl">成約</div>
-        <div class="mini-step"><button data-act="vCon" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCon" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>
+      <div class="v-side">${v.cancel ? `<div class="v-lbl">キャンセル</div><div class="v-cx">${yen(f.cancelPrice)}円</div>` : `<div class="v-lbl">成約</div>
+        <div class="mini-step"><button data-act="vCon" data-i="${i}" data-n="-1" aria-label="成約を減らす">−</button><span>${v.contracts}</span><button class="plus" data-act="vCon" data-i="${i}" data-n="1" aria-label="成約を増やす">＋</button></div>`}
         <button class="v-del" data-act="vDel" data-i="${i}">削除</button></div>
     </div>`).join('') : '<div class="empty">「＋ 現場を追加」で、回った現場を1件ずつ登録します</div>'}
-    <button class="btn mt12" data-act="vAdd">＋ 現場を追加</button>
-    <div class="price-row mt12"><span>現場単価 ${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice)}</span><span>成約単価 ${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice)}</span></div>
+    <div class="add-wrap"><button class="btn add-visit" data-act="vAdd">＋ 現場を追加</button></div>
+    <div class="price-box">
+      <div class="pb-t">単価<span>タップでこの日だけ変更</span></div>
+      <div class="pb-row"><span class="pb-l">現場</span>${priceChip('daily', 'site', f.sitePrice, S.settings.sitePrice)}</div>
+      <div class="pb-row"><span class="pb-l">キャンセル</span>${priceChip('daily', 'cancel', f.cancelPrice, S.settings.cancelPrice)}</div>
+      <div class="pb-row"><span class="pb-l">成約</span>${priceChip('daily', 'contract', f.contractPrice, S.settings.contractPrice)}</div>
+    </div>
   </div>`;
 }
 function setVisitPlace(pref, city) {
@@ -829,6 +860,7 @@ function dailySummaryHtml() {
   const c = calcDaily(ui.daily);
   return `<div class="sec-t">当日の収支（自動計算）</div>
     <div class="sum-row"><span class="k">現場売上<small>${ui.daily.sites}件×${yen(ui.daily.sitePrice)}円</small></span>${Y(c.site, 'c-sales')}</div>
+    <div class="sum-row"><span class="k">キャンセル売上<small>${ui.daily.cancels}件×${yen(ui.daily.cancelPrice)}円</small></span>${Y(c.cancel, 'c-sales')}</div>
     <div class="sum-row"><span class="k">成約売上<small>${ui.daily.contracts}件×${yen(ui.daily.contractPrice)}円</small></span>${Y(c.contract, 'c-sales')}</div>
     <div class="sum-row total"><span class="k">売上合計</span>${Y(c.sales, 'c-sales')}</div>
     <div class="sum-row"><span class="k">高速代</span>${Y(-c.highway, 'c-exp')}</div>
@@ -981,8 +1013,8 @@ function viewReport() {
 }
 function kvRows(a) {
   const R = (k, v, cls = '', strong = false) => `<div class="sum-row ${strong ? 'total' : ''}"><span class="k">${k}</span>${v}</div>`;
-  return R('現場件数', `<span class="num">${a.sites}<small>件</small></span>`) + R('成約件数', `<span class="num">${a.contracts}<small>件</small></span>`)
-    + R('現場売上', Y(a.site, 'c-sales')) + R('成約売上', Y(a.contract, 'c-sales')) + R('売上合計', Y(a.sales, 'c-sales'), '', true)
+  return R('現場件数', `<span class="num">${a.sites}<small>件</small></span>`) + R('キャンセル件数', `<span class="num">${a.cancels}<small>件</small></span>`) + R('成約件数', `<span class="num">${a.contracts}<small>件</small></span>`)
+    + R('現場売上', Y(a.site, 'c-sales')) + R('キャンセル売上', Y(a.cancel, 'c-sales')) + R('成約売上', Y(a.contract, 'c-sales')) + R('売上合計', Y(a.sales, 'c-sales'), '', true)
     + R('高速代', Y(a.highway, 'c-exp')) + EXP_CATS.map(c => R(c.label, Y(a.exp[c.key], 'c-exp'))).join('')
     + R('経費合計', Y(a.expTotal, 'c-exp'), '', true)
     + `<div class="sum-row grand total"><span class="k">収支</span>${Y(a.profit, profitCls(a.profit))}</div>`;
@@ -1063,7 +1095,7 @@ function chartSvg(ms, color) {
 
 /* ---------- 出力 ---------- */
 const REPORTS = [
-  ['sales', '売', '売上帳', '日付・内容・現場件数・成約件数・売上金額'],
+  ['sales', '売', '売上帳', '日付・内容・現場件数・キャンセル・成約件数・売上金額'],
   ['expense', '経', '経費帳', '高速代と経費2の全取引（日付・科目・支払先・摘要・金額）'],
   ['monthly', '月', '月次収支表', '月ごとの売上・経費・収支（年間選択時は12か月分）'],
   ['yearly', '年', '年間収支表', '1〜12月の月別一覧（A4横）'],
@@ -1094,10 +1126,10 @@ function buildReport(key, y, m) {
     const days = S.daily.filter(d => d.date >= f && d.date <= t).sort((a, b) => a.date < b.date ? -1 : 1);
     const a = aggregate(S, f, t);
     return { title: '売上帳', period: periodLabel(y, m), made, orientation: 'portrait', file: `売上帳_${y}${m ? pad(m) : ''}`,
-      sections: [{ type: 'table', columns: [{ label: '日付', w: 13, align: 'c' }, { label: '内容', w: 41, align: 'l' }, { label: '現場件数', w: 11 }, { label: '成約件数', w: 11 }, { label: '売上金額', w: 16 }],
-        rows: days.map(d => { const c = calcDaily(d); return [fmtSlash(d.date), salesContent(d), d.sites, d.contracts, yen(c.sales)]; }),
-        foot: [['合計', `${a.days}日`, a.sites, a.contracts, yen(a.sales)]] },
-      { type: 'kv', heading: '内訳', items: [[`現場売上（${a.sites}件）`, yen(a.site) + '円'], [`成約売上（${a.contracts}件）`, yen(a.contract) + '円'], ['売上合計', yen(a.sales) + '円', 1]] }] };
+      sections: [{ type: 'table', columns: [{ label: '日付', w: 12, align: 'c' }, { label: '内容', w: 37, align: 'l' }, { label: '現場件数', w: 10 }, { label: 'キャンセル', w: 10 }, { label: '成約件数', w: 10 }, { label: '売上金額', w: 15 }],
+        rows: days.map(d => { const c = calcDaily(d); return [fmtSlash(d.date), salesContent(d), d.sites, d.cancels || 0, d.contracts, yen(c.sales)]; }),
+        foot: [['合計', `${a.days}日`, a.sites, a.cancels, a.contracts, yen(a.sales)]] },
+      { type: 'kv', heading: '内訳', items: [[`現場売上（${a.sites}件）`, yen(a.site) + '円'], [`キャンセル売上（${a.cancels}件）`, yen(a.cancel) + '円'], [`成約売上（${a.contracts}件）`, yen(a.contract) + '円'], ['売上合計', yen(a.sales) + '円', 1]] }] };
   }
   if (key === 'expense') {
     const [f, t] = periodOf(y, m);
@@ -1118,9 +1150,9 @@ function buildReport(key, y, m) {
   }
   if (key === 'yearly') {
     const ms = yearMonths(y); const a = aggregate(S, ...yearRange(y));
-    const row = (l, x) => [l, x.sites, x.contracts, yen(x.site), yen(x.contract), yen(x.sales), yen(x.highway), ...EXP_CATS.map(c => yen(x.exp[c.key])), yen(x.expTotal), yen(x.profit)];
+    const row = (l, x) => [l, `${x.sites}/${x.cancels}/${x.contracts}`, yen(x.site), yen(x.cancel), yen(x.contract), yen(x.sales), yen(x.highway), ...EXP_CATS.map(c => yen(x.exp[c.key])), yen(x.expTotal), yen(x.profit)];
     return { title: '年間収支表', period: `${y}年（1月〜12月）`, made, orientation: 'landscape', file: `年間収支表_${y}`,
-      sections: [{ type: 'table', columns: [{ label: '月', w: 5, align: 'c' }, { label: '現場件数', w: 6 }, { label: '成約件数', w: 6 }, { label: '現場売上', w: 8.5 }, { label: '成約売上', w: 7.5 }, { label: '売上合計', w: 8.5 }, { label: '高速代', w: 7 }, ...EXP_CATS.map(c => ({ label: c.label, w: 7 })), { label: '経費合計', w: 8.5 }, { label: '収支', w: 8.5 }],
+      sections: [{ type: 'table', columns: [{ label: '月', w: 4.5, align: 'c' }, { label: '件数 現/キ/成', w: 8, align: 'c' }, { label: '現場売上', w: 7.5 }, { label: 'キャンセル売上', w: 7 }, { label: '成約売上', w: 6.5 }, { label: '売上合計', w: 7.5 }, { label: '高速代', w: 6 }, ...EXP_CATS.map(c => ({ label: c.label, w: 6 })), { label: '経費合計', w: 7.5 }, { label: '収支', w: 7.5 }],
         rows: ms.map((x, i) => row(`${i + 1}月`, x)), foot: [row('合計', a)] },
       { type: 'chart', heading: '月別推移', svg: chartSvg(ms, S.settings.color) }] };
   }
@@ -1144,9 +1176,9 @@ function buildReport(key, y, m) {
     EXP_CATS.forEach(c => { acc[c.account] = acc[c.account] || { amt: 0, src: [] }; acc[c.account].amt += a.exp[c.key]; acc[c.account].src.push(c.label); });
     return { title: '確定申告用 集計資料', period: `${y}年分（${y}年1月1日〜12月31日）`, made, orientation: 'portrait', file: `確定申告用集計資料_${y}`,
       sections: [
-        { type: 'kv', heading: '1. 収入金額（売上）', items: [[`現場売上（${a.sites}件）`, yen(a.site) + '円'], [`成約売上（${a.contracts}件）`, yen(a.contract) + '円'], ['売上（収入）金額 合計', yen(a.sales) + '円', 1]] },
-        { type: 'table', heading: '2. 月別売上（収入）金額', columns: [{ label: '月', w: 16, align: 'c' }, { label: '稼働日数', w: 16 }, { label: '現場件数', w: 16 }, { label: '成約件数', w: 16 }, { label: '売上金額', w: 36 }],
-          rows: ms.map((x, i) => [`${i + 1}月`, x.days, x.sites, x.contracts, yen(x.sales)]), foot: [['合計', a.days, a.sites, a.contracts, yen(a.sales)]] },
+        { type: 'kv', heading: '1. 収入金額（売上）', items: [[`現場売上（${a.sites}件）`, yen(a.site) + '円'], [`キャンセル売上（${a.cancels}件）`, yen(a.cancel) + '円'], [`成約売上（${a.contracts}件）`, yen(a.contract) + '円'], ['売上（収入）金額 合計', yen(a.sales) + '円', 1]] },
+        { type: 'table', heading: '2. 月別売上（収入）金額', columns: [{ label: '月', w: 12, align: 'c' }, { label: '稼働日数', w: 13 }, { label: '現場件数', w: 13 }, { label: 'キャンセル', w: 13 }, { label: '成約件数', w: 13 }, { label: '売上金額', w: 36 }],
+          rows: ms.map((x, i) => [`${i + 1}月`, x.days, x.sites, x.cancels, x.contracts, yen(x.sales)]), foot: [['合計', a.days, a.sites, a.cancels, a.contracts, yen(a.sales)]] },
         { type: 'table', heading: '3. 必要経費（勘定科目別・目安）', columns: [{ label: '勘定科目', w: 24, align: 'l' }, { label: 'アプリの科目', w: 46, align: 'l' }, { label: '金額', w: 30 }],
           rows: Object.entries(acc).map(([k, v]) => [k, v.src.join('・'), yen(v.amt)]), foot: [['経費合計', '', yen(a.expTotal)]] },
         { type: 'kv', heading: '4. 差引金額', items: [['売上（収入）金額', yen(a.sales) + '円'], ['必要経費 合計', yen(a.expTotal) + '円'], ['差引金額（売上−経費）', yen(a.profit) + '円', 1]] },
@@ -1155,7 +1187,7 @@ function buildReport(key, y, m) {
   }
 }
 function kvItems(a) {
-  return [['現場件数', a.sites + '件'], ['成約件数', a.contracts + '件'], ['現場売上', yen(a.site) + '円'], ['成約売上', yen(a.contract) + '円'], ['売上合計', yen(a.sales) + '円', 1],
+  return [['現場件数', a.sites + '件'], ['キャンセル件数', a.cancels + '件'], ['成約件数', a.contracts + '件'], ['現場売上', yen(a.site) + '円'], ['キャンセル売上', yen(a.cancel) + '円'], ['成約売上', yen(a.contract) + '円'], ['売上合計', yen(a.sales) + '円', 1],
     ['高速代', yen(a.highway) + '円'], ...EXP_CATS.map(c => [c.label, yen(a.exp[c.key]) + '円']), ['経費合計', yen(a.expTotal) + '円', 1], ['収支（売上合計−経費合計）', yen(a.profit) + '円', 1]];
 }
 function salesContent(d) {
@@ -1372,6 +1404,7 @@ function viewSettings() {
   </div>
   <div class="card"><div class="sec-t">単価</div>
     <div class="field"><label>1現場単価</label><div class="yen-in"><input inputmode="numeric" value="${st.sitePrice}" data-ch="setSite"><span>円</span></div></div>
+    <div class="field"><label>キャンセル現場 1件単価</label><div class="yen-in"><input inputmode="numeric" value="${st.cancelPrice}" data-ch="setCancel"><span>円</span></div></div>
     <div class="field"><label>1成約単価</label><div class="yen-in"><input inputmode="numeric" value="${st.contractPrice}" data-ch="setContract"><span>円</span></div></div>
     <div class="small-note">ここは標準の単価です。変更すると、これから入力する実績と、単価を個別に変えていない予定に反映されます。日によって単価が違う場合は、日次入力・予定入力の「1件○円」をタップするとその日だけ変更できます。登録済みの実績は、登録した時点の単価のまま保存されます（過去の売上は変わりません）。</div>
   </div>
@@ -1416,13 +1449,14 @@ function linkPlanFor(rec) {
 async function saveDaily() {
   const f = ui.daily;
   if (!f.date) return toast('日付を選択してください');
-  if (!f.sites && !f.contracts && !f.highway && !(await uiConfirm('現場件数・成約件数・高速代がすべて0です。このまま保存しますか？'))) return;
+  syncVisits(f);
+  if (!f.sites && !f.cancels && !f.contracts && !f.highway && !(await uiConfirm('現場・キャンセル・成約・高速代がすべて0です。このまま保存しますか？'))) return;
   const dup = S.daily.find(d => d.date === f.date && d.id !== f.id);
   if (dup) { await uiAlert(`${fmtFull(f.date)}はすでに登録されています。登録済みデータを編集してください。`); ui.daily = blankDaily(f.date); return render(); }
   const now = new Date().toISOString();
   let rec = f.id ? S.daily.find(d => d.id === f.id) : null;
   syncVisits(f);
-  const data = { date: f.date, visits: clone(f.visits), areas: clone(f.areas), sites: f.sites, contracts: f.contracts, highway: f.highway, sitePrice: f.sitePrice, contractPrice: f.contractPrice };
+  const data = { date: f.date, visits: clone(f.visits), areas: clone(f.areas), sites: f.sites, cancels: f.cancels, cancelPrice: f.cancelPrice, contracts: f.contracts, highway: f.highway, sitePrice: f.sitePrice, contractPrice: f.contractPrice };
   if (rec) Object.assign(rec, data, { updatedAt: now });
   else { rec = Object.assign({ id: uid(), createdAt: now, updatedAt: now, planId: null, memo: '', ext: {} }, data); S.daily.push(rec); }
   linkPlanFor(rec);
@@ -1532,11 +1566,11 @@ async function restore(file) {
   } catch (e) { await uiAlert('復元できませんでした：' + e.message); }
 }
 function allCsv() {
-  const rows = [['区分', '日付', '科目', '訪問地区', '現場件数', '成約件数', '現場単価', '成約単価', '売上金額', '経費金額', '支払先', '摘要', '支払方法', '登録日時', 'ID']];
-  S.daily.forEach(d => { const c = calcDaily(d); rows.push(['売上', d.date, '売上', areaText(d.areas), d.sites, d.contracts, d.sitePrice, d.contractPrice, c.sales, '', '', salesContent(d), '', d.createdAt || '', d.id]);
-    if (d.highway) rows.push(['経費', d.date, '高速代', areaText(d.areas), '', '', '', '', '', d.highway, '', '高速道路利用料', '', d.createdAt || '', d.id + '-hw']); });
-  S.expenses.forEach(e => rows.push(['経費', e.date, catLabel(e.category), '', '', '', '', '', '', e.amount, e.payee, e.desc, e.payMethod, e.createdAt || '', e.id]));
-  S.plans.forEach(p => { const c = calcPlan(p, S.settings); rows.push(['予定', p.date, p.status === 'converted' ? '予定(実績化済)' : '予定', areaText(p.areas), p.sites, p.contracts, planPrice(p, S.settings, 'sitePrice'), planPrice(p, S.settings, 'contractPrice'), c.sales, c.highway || '', '', p.memo, '', p.createdAt || '', p.id]); });
+  const rows = [['区分', '日付', '科目', '訪問地区', '現場件数', 'キャンセル件数', '成約件数', '現場単価', 'キャンセル単価', '成約単価', '売上金額', '経費金額', '支払先', '摘要', '支払方法', '登録日時', 'ID']];
+  S.daily.forEach(d => { const c = calcDaily(d); rows.push(['売上', d.date, '売上', areaText(d.areas), d.sites, d.cancels || 0, d.contracts, d.sitePrice, d.cancelPrice, d.contractPrice, c.sales, '', '', salesContent(d), '', d.createdAt || '', d.id]);
+    if (d.highway) rows.push(['経費', d.date, '高速代', areaText(d.areas), '', '', '', '', '', '', '', d.highway, '', '高速道路利用料', '', d.createdAt || '', d.id + '-hw']); });
+  S.expenses.forEach(e => rows.push(['経費', e.date, catLabel(e.category), '', '', '', '', '', '', '', '', e.amount, e.payee, e.desc, e.payMethod, e.createdAt || '', e.id]));
+  S.plans.forEach(p => { const c = calcPlan(p, S.settings); rows.push(['予定', p.date, p.status === 'converted' ? '予定(実績化済)' : '予定', areaText(p.areas), p.sites, '', p.contracts, planPrice(p, S.settings, 'sitePrice'), '', planPrice(p, S.settings, 'contractPrice'), c.sales, c.highway || '', '', p.memo, '', p.createdAt || '', p.id]); });
   const head = rows.shift(); rows.sort((a, b) => a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
   shareOrDownload(new Blob([toCsv([head, ...rows])], { type: 'text/csv' }), `にこほーむ-全取引_${todayStr().replace(/-/g, '')}.csv`);
 }
@@ -1624,6 +1658,7 @@ const A = {
     const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (!pl.city) openPicker('visit', f.visits.length - 1);
   },
+  vCancel: el => { const v = ui.daily.visits[+el.dataset.i]; v.cancel = el.dataset.v === '1'; if (v.cancel) v.contracts = 0; syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
   vCon: el => { const v = ui.daily.visits[+el.dataset.i]; v.contracts = Math.max(0, Math.min(99, v.contracts + (+el.dataset.n))); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y); },
   vDel: async el => {
     const i = +el.dataset.i, v = ui.daily.visits[i];
@@ -1651,7 +1686,7 @@ const A = {
   savePlan, delPlan: deletePlan,
   editPrice: async el => {
     const kind = el.dataset.kind, form = kind === 'plan' ? ui.plan : ui.daily;
-    const key = el.dataset.f === 'site' ? 'sitePrice' : 'contractPrice', label = el.dataset.f === 'site' ? '現場単価' : '成約単価';
+    const key = { site: 'sitePrice', cancel: 'cancelPrice', contract: 'contractPrice' }[el.dataset.f], label = { site: '現場単価', cancel: 'キャンセル単価', contract: '成約単価' }[el.dataset.f];
     const cur = kind === 'plan' ? planPrice(form, S.settings, key) : form[key];
     const r = await priceDialog(label, cur, S.settings[key]); if (!r) return;
     if (r.setDefault) { S.settings[key] = r.price; await persist(); }
@@ -1736,6 +1771,7 @@ const C = { // change
   setColorPick: async el => { S.settings.color = el.value; await persist(); render(); },
   setYear: async el => { S.settings.year = el.value === 'auto' ? 'auto' : +el.value; await persist(); toast('年度を変更しました'); },
   setSite: async el => { const v = toInt(el.value); if (!v) return toast('単価を入力してください'); S.settings.sitePrice = v; await persist(); toast(`現場単価を${yen(v)}円にしました`); render(); },
+  setCancel: async el => { const v = toInt(el.value); if (!v) return toast('単価を入力してください'); S.settings.cancelPrice = v; await persist(); toast(`キャンセル単価を${yen(v)}円にしました`); render(); },
   setContract: async el => { const v = toInt(el.value); if (!v) return toast('単価を入力してください'); S.settings.contractPrice = v; await persist(); toast(`成約単価を${yen(v)}円にしました`); render(); },
   restore: el => { const f = el.files[0]; if (f) restore(f); el.value = ''; },
 };
