@@ -410,7 +410,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -633,7 +633,7 @@ function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
   if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? clone(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
-  return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, p.contracts) : [], highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
+  return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, 0) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
     cancelPrice: S.settings.cancelPrice, sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
 }
 function lastVisitPlace(beforeDate) {
@@ -840,7 +840,7 @@ function viewDaily() {
       <input type="date" value="${f.date}" data-ch="dailyDate">
       <button class="arrow" data-act="dayShift" data-n="1">›</button></div>
     <div class="wd">${fmtFull(f.date)}　${ex ? '<span class="badge g">登録済み・編集中</span>' : '<span class="badge">新規入力</span>'}</div>
-    ${f.fromPlan ? `<div class="notice">この日の予定を読み込みました。実際の件数に直して保存すると実績に切り替わります（予定は二重計上されません）。</div>` : ''}
+    ${f.fromPlan ? `<div class="notice">この日の予定（現場数・地区）を読み込みました。成約は0件から始まるので、実際の結果を＋で入れて保存すると実績に切り替わります（予定は二重計上されません）。</div>` : ''}
     ${ex && plan ? `<div class="notice ok">この日の予定は実績に切り替え済みです。</div>` : ''}
   </div>`;
   h += visitsCard(f);
@@ -872,7 +872,6 @@ function visitsCard(f) {
         <select class="inp v-sel ${v.pref ? '' : 'empty-sel'}" data-ch="vPref" data-i="${i}"><option value="">都道府県</option>${S.settings.regions.map(r => `<option value="${esc(r.pref)}" ${r.pref === v.pref ? 'selected' : ''}>${esc(r.pref)}</option>`).join('')}</select>
         <select class="inp v-sel ${v.city ? '' : 'empty-sel'}" data-ch="vCity" data-i="${i}" ${v.pref ? '' : 'disabled'}><option value="">市区町村</option>${((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities.includes(v.city) || !v.city ? [] : [v.city]).concat((S.settings.regions.find(r => r.pref === v.pref) || { cities: [] }).cities).map(c => `<option value="${esc(c)}" ${c === v.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}${v.pref ? '<option value="__add">＋ リストにない市区町村を追加</option>' : ''}</select>
       </div>
-      <input class="inp v-memo" placeholder="町名・番地・邸名（任意）" value="${esc(v.memo)}" data-in="vMemo" data-i="${i}">
       <div class="v-foot">
         <div class="v-kind"><button class="${v.cancel ? '' : 'on'}" data-act="vCancel" data-i="${i}" data-v="0">実施</button><button class="${v.cancel ? 'on cx' : ''}" data-act="vCancel" data-i="${i}" data-v="1">キャンセル</button></div>
         ${v.cancel ? `<div class="v-cx">キャンセル ${yen(f.cancelPrice)}円</div>` : `<div class="v-con"><span class="v-lbl">成約</span>

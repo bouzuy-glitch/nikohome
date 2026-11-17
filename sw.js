@@ -1,5 +1,5 @@
 /* にこほーむ Service Worker：オフラインでも起動できるようにアプリ本体とフォントをキャッシュ */
-const CACHE = 'nikohome-v1.10.0';
+const CACHE = 'nikohome-v1.11.0';
 const FONT_CACHE = 'nikohome-fonts-v1';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-180.png', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
