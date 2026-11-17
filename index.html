@@ -260,7 +260,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeri
 .v-head{display:flex;align-items:center;gap:8px}
 .v-head .v-no{margin-top:0}
 .v-head .v-del{margin-left:auto}
-.v-head .v-addr-l{flex:1;margin:0;font-size:13px;color:var(--sub)}
+.v-head .v-addr-l{flex:1;margin:0;font-size:15px;color:var(--text);font-family:"Mochiy Pop One",sans-serif;font-weight:400}
 .v-addr{grid-template-columns:40% 1fr}
 .v-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .v-con{display:flex;align-items:center;gap:8px}
@@ -438,7 +438,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.15.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -686,11 +686,20 @@ function syncVisits(f) {
 }
 function blankDaily(date) {
   const ex = S.daily.find(d => d.date === date);
-  if (ex) return syncVisits({ date, id: ex.id, visits: ex.visits && ex.visits.length ? normVisits(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts, ex.cancels || 0), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
+  if (ex) return withAutoRow({ date, id: ex.id, visits: ex.visits && ex.visits.length ? normVisits(ex.visits) : visitsFrom(ex.areas, ex.sites, ex.contracts, ex.cancels || 0), highway: ex.highway, dayExp: Object.assign({ gas: 0, parking: 0, material: 0 }, ex.dayExp || {}), sitePrice: ex.sitePrice, cancelPrice: ex.cancelPrice != null ? ex.cancelPrice : S.settings.cancelPrice, contractPrice: ex.contractPrice, fromPlan: null, dirty: false });
   const p = S.plans.find(p => p.date === date && p.status !== 'converted');
-  return syncVisits({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, 0) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
+  return withAutoRow({ date, id: null, visits: p ? visitsFrom(p.areas, p.sites, 0) : [],  /* 成約は実績なので予定からは引き継がない（0件から） */ highway: p ? (p.highway || 0) : 0, dayExp: { gas: 0, parking: 0, material: 0 },
     cancelPrice: S.settings.cancelPrice, sitePrice: p ? planPrice(p, S.settings, 'sitePrice') : S.settings.sitePrice, contractPrice: p ? planPrice(p, S.settings, 'contractPrice') : S.settings.contractPrice, fromPlan: p ? p.id : null, dirty: false });
 }
+function prevPlace(beforeDate) {
+  const prev = [...S.daily].filter(d => d.date < beforeDate && d.areas && d.areas.length).sort((a, b) => a.date < b.date ? 1 : -1)[0];
+  if (!prev) return { pref: '', city: '' };
+  const vs = prev.visits && prev.visits.length ? prev.visits : prev.areas; const l = vs[vs.length - 1];
+  return { pref: l.pref || '', city: l.city || '' };
+}
+/* 日次入力を開いたときに最初から出しておく住所の欄（件数は0から） */
+function autoRow(date) { const pl = prevPlace(date); return { id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0 }; }
+function withAutoRow(f) { if (!f.visits.length) f.visits.push(autoRow(f.date)); return syncVisits(f); }
 function lastVisitPlace(beforeDate) {
   const f = ui.daily; if (f && f.visits.length) { const v = f.visits[f.visits.length - 1]; if (v.city) return { pref: v.pref, city: v.city }; }
   const prev = [...S.daily].filter(d => d.date < beforeDate && d.areas.length).sort((a, b) => a.date < b.date ? 1 : -1)[0];
@@ -1553,6 +1562,7 @@ function linkPlanFor(rec) {
 async function saveDaily() {
   const f = ui.daily;
   if (!f.date) return toast('日付を選択してください');
+  f.visits = f.visits.filter(v => v.sites || v.cancels || v.contracts);  // 件数0の住所欄は保存しない
   syncVisits(f);
   if (!f.sites && !f.cancels && !f.contracts && !f.highway && !dayExpSum(f) && !(await uiConfirm('現場・キャンセル・成約・経費がすべて0です。このまま保存しますか？'))) return;
   const dup = S.daily.find(d => d.date === f.date && d.id !== f.id);
@@ -1758,13 +1768,13 @@ const A = {
   pickVisit: el => openPicker('visit', +el.dataset.i),
   vAdd: () => {
     const f = ui.daily; const pl = lastVisitPlace(f.date);
-    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 1, cancels: 0, contracts: 0 });
+    f.visits.push({ id: uid(), pref: pl.pref, city: pl.city, kind: 'site', sites: 0, cancels: 0, contracts: 0 });
     syncVisits(f); f.dirty = true; render(); refreshDailySummary();
     const last = document.querySelectorAll('.visit'); if (last.length) last[last.length - 1].scrollIntoView({ block: 'center', behavior: 'smooth' });
   },
   vKind: el => {
     const v = ui.daily.visits[+el.dataset.i], k = el.dataset.k; if (v.kind === k || (!v.kind && k === 'site')) return;
-    const n = Math.max(1, v.sites + v.cancels);
+    const n = v.sites + v.cancels;
     if (k === 'cancel') Object.assign(v, { kind: 'cancel', cancels: n, sites: 0, contracts: 0 }); else Object.assign(v, { kind: 'site', sites: n, cancels: 0 });
     syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
   },
@@ -1772,7 +1782,7 @@ const A = {
   vDel: async el => {
     const i = +el.dataset.i, v = ui.daily.visits[i];
     if ((v.sites + v.cancels + v.contracts > 1) && !(await uiConfirm(`${i + 1}番目（${v.city || '地区未設定'}）を削除しますか？`, { ok: '削除する', danger: true }))) return;
-    ui.daily.visits.splice(i, 1); syncVisits(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
+    ui.daily.visits.splice(i, 1); withAutoRow(ui.daily); ui.daily.dirty = true; const y = window.scrollY; render(); window.scrollTo(0, y);
   },
   closePicker: (el, e) => { if (el.dataset.self && e.target !== el) return; ui.picker = null; $('#overlay').innerHTML = ''; render(); },
   pickPref: el => { ui.picker.pi = +el.dataset.i; renderPicker(); },
