@@ -442,7 +442,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.18.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -489,7 +489,7 @@ const EXP_CATS = [
   { key: 'gas',    label: 'ガソリン代', account: '車両費' },
   { key: 'oil',    label: 'オイル交換', account: '車両費' },
   { key: 'wash',   label: '洗車',       account: '車両費' },
-  { key: 'parking', label: '駐車場',    account: '旅費交通費' },
+  { key: 'parking', label: '駐車場',    account: '旅費交通費', noInput: true },  // 駐車場は日次入力で入れる
   { key: 'tool',   label: '道具代',     account: '消耗品費' },
   { key: 'supply', label: '備品代',     sub: '紙・インク等', account: '消耗品費' },
   { key: 'material', label: '材料費',   account: '消耗品費' },
@@ -1109,7 +1109,7 @@ function viewExpense() {
   const rcpt = f.receiptData || (!f.receiptRemoved && f.receiptId);
   let h = `<div class="card"><div class="sec-t">${f.id ? '経費を編集' : '経費を登録'}<span class="r">発生した時だけ入力</span></div>
     <div class="field"><label>発生日</label><input type="date" class="inp" value="${f.date}" data-ch="eDate" style="font-weight:800;font-size:18px"></div>
-    <div class="field"><label>経費科目</label><div class="cats">${EXP_CATS.map(c => `<button class="cat ${f.category === c.key ? 'on' : ''}" data-act="eCat" data-k="${c.key}">${c.label}${c.sub ? `<small>${c.sub}</small>` : ''}</button>`).join('')}</div></div>
+    <div class="field"><label>経費科目</label><div class="cats">${EXP_CATS.filter(c => !c.noInput || f.category === c.key).map(c => `<button class="cat ${f.category === c.key ? 'on' : ''}" data-act="eCat" data-k="${c.key}">${c.label}${c.sub ? `<small>${c.sub}</small>` : ''}</button>`).join('')}</div></div>
     <div class="field"><label>金額</label><div class="yen-in"><input inputmode="numeric" pattern="[0-9]*" placeholder="0" value="${f.amount || ''}" data-in="eAmount"><span>円</span></div></div>
     <div class="field"><label>内容・摘要</label><input class="inp" value="${esc(f.desc)}" data-in="eDesc" placeholder="例：営業車 給油"></div>
     <div class="field"><label>支払先<span class="opt">任意</span></label><input class="inp" value="${esc(f.payee)}" data-in="ePayee" placeholder="例：ENEOS ○○店" list="payee-list">
