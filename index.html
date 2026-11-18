@@ -442,7 +442,7 @@ main{padding-top:16px}
    データ構造は将来の青色/白色申告・消費税・家事按分・減価償却に備え
    各レコードに拡張用フィールド(ext)を持たせている。
    ========================================================= */
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.17.0';
 const SCHEMA_VERSION = 1;
 
 /* ---------- 小さなユーティリティ ---------- */
@@ -488,6 +488,7 @@ const DEFAULT_SETTINGS = {
 const EXP_CATS = [
   { key: 'gas',    label: 'ガソリン代', account: '車両費' },
   { key: 'oil',    label: 'オイル交換', account: '車両費' },
+  { key: 'wash',   label: '洗車',       account: '車両費' },
   { key: 'parking', label: '駐車場',    account: '旅費交通費' },
   { key: 'tool',   label: '道具代',     account: '消耗品費' },
   { key: 'supply', label: '備品代',     sub: '紙・インク等', account: '消耗品費' },
@@ -509,8 +510,8 @@ let S = { schema: SCHEMA_VERSION, settings: clone(DEFAULT_SETTINGS), daily: [], 
 /* 実績1日分。単価は登録時点の単価をレコードに保存しているため、
    設定で単価を変えても過去の売上は変わらない */
 /* 経費1（当日入力）：高速代のほかに日々入力する経費 */
-const DAY_EXP = [{ key: 'gas', label: 'ガソリン', legacy: true }, { key: 'parking', label: '駐車場' }, { key: 'material', label: '材料費' }];
-/* 入力欄に出す項目（ガソリンは経費入力へ。過去に入力済みの日だけ表示） */
+const DAY_EXP = [{ key: 'gas', label: 'ガソリン', legacy: true }, { key: 'parking', label: '駐車場' }, { key: 'material', label: '材料費', legacy: true }];
+/* 入力欄に出す項目（ガソリン・材料費は経費入力へ。過去に入力済みの日だけ表示） */
 const dayExpFields = f => DAY_EXP.filter(x => !x.legacy || (f.dayExp && f.dayExp[x.key]));
 const dayExpSum = d => DAY_EXP.reduce((a, x) => a + ((d.dayExp && d.dayExp[x.key]) || 0), 0);
 /* 行（現場住所の欄）ごとの単価。未設定なら日の単価 */
